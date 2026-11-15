@@ -1,0 +1,61 @@
+# Cloud builds on Codemagic (codemagic.io): builds the iOS app on a Mac and
+# sends it to TestFlight, and builds the Android test APK/AAB.
+# Setup steps are in README, section "Publier".
+
+workflows:
+  ios-testflight:
+    name: iOS → TestFlight (version de test)
+    max_build_duration: 60
+    integrations:
+      # App Store Connect API key added in Codemagic > Team > Integrations.
+      app_store_connect: EcoBudget App Store Connect
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.ecobudget.ecoBudget
+    scripts:
+      - name: Dependencies
+        script: |
+          flutter pub get
+          cd ios && pod install
+      - name: Signing
+        script: xcode-project use-profiles
+      - name: Tests
+        script: flutter test
+      - name: Build IPA
+        # Test mode stays on (default of EB_TEST_MODE). Each build gets the
+        # next build number so TestFlight accepts it.
+        script: |
+          flutter build ipa --release \
+            --build-number=$((BUILD_NUMBER + 1)) \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
+  android-test:
+    name: Android → APK de test
+    max_build_duration: 45
+    environment:
+      flutter: stable
+      # Upload key added in Codemagic > Team > Code signing identities.
+      android_signing:
+        - ecobudget_upload
+    scripts:
+      - name: Dependencies
+        script: flutter pub get
+      - name: Tests
+        script: flutter test
+      - name: Build APK and AAB
+        script: |
+          flutter build apk --release --build-number=$((BUILD_NUMBER + 1))
+          flutter build appbundle --release --build-number=$((BUILD_NUMBER + 1))
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/bundle/release/app-release.aab
