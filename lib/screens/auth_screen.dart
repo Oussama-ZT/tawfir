@@ -148,7 +148,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             ),
                             const Spacer(),
                             const SizedBox(height: 32),
-                            Text('EcoBudget',
+                            Text('Tawfir',
                                 style: context.type.displayLarge?.copyWith(color: eco.onBlue, fontSize: 52)),
                             const SizedBox(height: 12),
                             ConstrainedBox(

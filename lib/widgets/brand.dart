@@ -29,7 +29,7 @@ void paintEcoMark(Canvas canvas, Offset center, double s, Color coin, Color leaf
   canvas.restore();
 }
 
-/// The EcoBudget mark: a yellow coin with a blue leaf cut through it.
+/// The Tawfir mark: a yellow coin with a blue leaf cut through it.
 class EcoMark extends StatelessWidget {
   const EcoMark({super.key, this.size = 48});
 

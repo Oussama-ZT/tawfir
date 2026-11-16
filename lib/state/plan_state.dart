@@ -111,6 +111,8 @@ class PlanState extends ChangeNotifier {
 
   bool get canUseForeignCurrency => plan.foreignCurrencyWallets;
 
+  bool get canUseDebts => plan.debts;
+
   bool canAddGoal(int currentCount) => plan.goalLimit == null || currentCount < plan.goalLimit!;
 
   bool canAddCategoryBudget(int currentCount) =>

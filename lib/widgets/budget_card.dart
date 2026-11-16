@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../services/budget_math.dart';
 import '../state/app_state.dart';
 import '../state/session_state.dart';
 import '../theme/app_theme.dart';
@@ -14,7 +15,7 @@ import '../l10n/l10n.dart';
 /// The month's budget drawn as a payment card: what is left where the card
 /// number goes, the neon month track beside the chip, the end of the month
 /// as the expiry date, and the share used where a network logo would be.
-/// Indigo while on track, crimson once the budget is exceeded.
+/// Indigo within budget, amber from 80 % used, crimson once exceeded.
 class BudgetCard extends StatelessWidget {
   const BudgetCard({super.key, required this.month, this.onTap, this.onEdit});
 
@@ -25,6 +26,7 @@ class BudgetCard extends StatelessWidget {
   final VoidCallback? onEdit;
 
   static const _onTrack = (Color(0xFF141A5E), Color(0xFF4B55F0));
+  static const _near = (Color(0xFF5E3A06), Color(0xFFD9861C));
   static const _over = (Color(0xFF5C0B26), Color(0xFFE0335B));
 
   @override
@@ -33,30 +35,36 @@ class BudgetCard extends StatelessWidget {
     final holder = context.watch<SessionState>().user?.name ?? '';
     final now = DateTime.now();
     final current = sameMonth(month, now);
-    // The budget is an envelope: what is left in it, and what went beyond.
-    final env = state.envelopeIn(month);
-    final budget = env.total;
-    final hasBudget = budget > 0;
-    final over = env.exceeded;
-    final days = daysInMonth(month);
+    // Every expense of the month counts against the budget of that month.
+    final st = state.budgetStatus(month);
+    final budget = st.budget;
+    final hasBudget = st.hasBudget;
+    final over = st.level == BudgetLevel.exceeded;
+    final days = st.daysInMonth;
     final today = current ? now.day : (month.isBefore(now) ? days : 1);
-    final daysLeft = days - now.day + 1;
     final name = monthName(month);
     final elided = 'aeiouéâ'.contains(name[0]);
 
-    final status = !hasBudget ? tr('Dépensé en {0}', [name]) : (over ? tr('Hors budget') : tr('Reste dans l\'enveloppe'));
-    final amount = !hasBudget ? state.spentIn(month) : (over ? env.outside : env.left);
+    final status = !hasBudget
+        ? tr('Dépensé en {0}', [name])
+        : over
+        ? tr('Budget dépassé')
+        : tr('Reste à dépenser');
+    final amount = !hasBudget ? st.spent : (over ? st.overspent : st.remaining);
     final detail = !hasBudget
         ? (onTap != null ? tr('Touchez la carte pour fixer votre budget.') : tr('Aucun budget fixé.'))
         : over
-        ? tr('Enveloppe de {0} entièrement utilisée', [money(budget)])
-        : env.outside > 0
-        ? tr('+{0} dépensés hors budget', [money(env.outside)])
+        ? tr('Dépensé : {0} sur {1}', [money(st.spent), money(budget)])
         : current
-        ? tr('sur {0}, soit {1} par jour', [money(budget), moneyApprox(env.left / daysLeft)])
-        : tr('sur {0}', [money(budget)]);
-    final spent = env.used + env.outside;
-    final (deep, lit) = over ? _over : _onTrack;
+        ? tr("Jusqu'à {0} par jour, sur {1}", [moneyApprox(st.dailyAllowance), money(budget)])
+        : tr('{0} dépensés sur {1}', [money(st.spent), money(budget)]);
+    final spent = st.spent;
+    // Indigo within budget, amber when getting close, crimson beyond.
+    final (deep, lit) = switch (st.level) {
+      BudgetLevel.exceeded => _over,
+      BudgetLevel.approaching => _near,
+      _ => _onTrack,
+    };
     const white = Colors.white;
     final soft = white.withValues(alpha: 0.72);
 
@@ -181,7 +189,7 @@ class BudgetCard extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsetsDirectional.only(end: 12),
                     child: Text(
-                      hasBudget ? percent(env.ratio) : activeCurrency.code,
+                      hasBudget ? percent(st.ratio) : activeCurrency.code,
                       style: TextStyle(
                         fontFamily: displayFont,
                         fontWeight: FontWeight.w800,

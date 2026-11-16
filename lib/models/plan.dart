@@ -15,6 +15,7 @@ enum Plan {
     foreignCurrencyWallets: false,
     goalLimit: 2,
     categoryBudgetLimit: 3,
+    debts: false,
   ),
   pro(
     label: 'Pro',
@@ -24,6 +25,7 @@ enum Plan {
     foreignCurrencyWallets: false,
     goalLimit: null,
     categoryBudgetLimit: null,
+    debts: true,
   ),
   premium(
     label: 'Premium',
@@ -33,6 +35,7 @@ enum Plan {
     foreignCurrencyWallets: true,
     goalLimit: null,
     categoryBudgetLimit: null,
+    debts: true,
   );
 
   const Plan({
@@ -43,6 +46,7 @@ enum Plan {
     required this.foreignCurrencyWallets,
     required this.goalLimit,
     required this.categoryBudgetLimit,
+    required this.debts,
   });
 
   final String label;
@@ -64,6 +68,9 @@ enum Plan {
 
   /// Null means unlimited.
   final int? categoryBudgetLimit;
+
+  /// Money lent and borrowed (Autres → Dettes).
+  final bool debts;
 
   bool get isFree => this == starter;
 

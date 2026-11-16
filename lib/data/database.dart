@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/app_user.dart';
 import '../models/category.dart';
+import '../models/debt.dart';
 import '../models/deposit.dart';
 import '../models/expense.dart';
 import '../models/savings_goal.dart';
@@ -18,7 +19,7 @@ class AppDatabase {
     final path = join(await getDatabasesPath(), 'ecobudget.db');
     final db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE expenses (
@@ -50,6 +51,7 @@ class AppDatabase {
         await _upgradeToV3(db);
         await _upgradeToV4(db);
         await _upgradeToV5(db);
+        await _upgradeToV6(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -71,6 +73,7 @@ class AppDatabase {
         if (oldVersion < 3) await _upgradeToV3(db);
         if (oldVersion < 4) await _upgradeToV4(db);
         if (oldVersion < 5) await _upgradeToV5(db);
+        if (oldVersion < 6) await _upgradeToV6(db);
       },
     );
     return AppDatabase._(db);
@@ -136,7 +139,23 @@ class AppDatabase {
       )''');
   }
 
-  static const _userTables = ['expenses', 'budgets', 'goals', 'wallets', 'categories', 'deposits'];
+  /// Version 6: money lent and borrowed. A new table only: nothing that
+  /// exists changes.
+  static Future<void> _upgradeToV6(Database db) async {
+    await db.execute('''
+      CREATE TABLE debts (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        person TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        due_date INTEGER,
+        note TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        entries TEXT NOT NULL
+      )''');
+  }
+
+  static const _userTables = ['expenses', 'budgets', 'goals', 'wallets', 'categories', 'deposits', 'debts'];
 
   // ---------------------------------------------------------------- users --
 
@@ -286,6 +305,19 @@ class AppDatabase {
   Future<void> deleteDeposit(int userId, String id) =>
       _db.delete('deposits', where: 'user_id = ? AND id = ?', whereArgs: [userId, id]);
 
+  // ---------------------------------------------------------------- debts --
+
+  Future<List<Debt>> debts(int userId) async {
+    final rows = await _db.query('debts', where: 'user_id = ?', whereArgs: [userId], orderBy: 'created_at ASC');
+    return rows.map(Debt.fromMap).toList();
+  }
+
+  Future<void> saveDebt(int userId, Debt d) =>
+      _db.insert('debts', {...d.toMap(), 'user_id': userId}, conflictAlgorithm: ConflictAlgorithm.replace);
+
+  Future<void> deleteDebt(int userId, String id) =>
+      _db.delete('debts', where: 'user_id = ? AND id = ?', whereArgs: [userId, id]);
+
   // ----------------------------------------------------------- categories --
 
   Future<List<ExpenseCategory>> categories(int userId) async {
@@ -313,6 +345,7 @@ class AppDatabase {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   }) async {
     await _db.transaction((txn) async {
       for (final table in _userTables) {
@@ -334,6 +367,9 @@ class AppDatabase {
       }
       for (final d in deposits) {
         batch.insert('deposits', {...d.toMap(), 'user_id': userId});
+      }
+      for (final d in debts) {
+        batch.insert('debts', {...d.toMap(), 'user_id': userId});
       }
       await batch.commit(noResult: true);
     });

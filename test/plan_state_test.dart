@@ -28,6 +28,7 @@ void main() {
       expect(plan.canCustomizeCategories, isFalse);
       expect(plan.canAddGoal(Plan.starter.goalLimit!), isFalse);
       expect(plan.canAddCategoryBudget(Plan.starter.categoryBudgetLimit!), isFalse);
+      expect(plan.canUseDebts, isFalse);
     });
 
     test('Pro: two cash/bank wallets and custom categories', () async {
@@ -37,6 +38,7 @@ void main() {
       expect(plan.canUseWalletType(WalletType.savings), isFalse);
       expect(plan.canCustomizeCategories, isTrue);
       expect(plan.canAddGoal(50), isTrue);
+      expect(plan.canUseDebts, isTrue);
     });
 
     test('Premium: unlimited wallets of every kind', () async {
@@ -46,6 +48,7 @@ void main() {
         expect(plan.canUseWalletType(t), isTrue);
       }
       expect(Plan.premium.customWalletNames, isTrue);
+      expect(plan.canUseDebts, isTrue);
     });
 
     test('lowest plan for a wallet count', () {

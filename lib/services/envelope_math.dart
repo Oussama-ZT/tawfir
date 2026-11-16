@@ -63,13 +63,18 @@ class EnvelopeMath {
       return EnvelopeMonth(
         total: 0,
         used: 0,
-        outside: spent,
+        outside: spent > 0 ? spent : 0,
         leftByWallet: const {},
-        outsideExpenseIds: {for (final e in expenses) ?e.id},
+        // A refund gives money back; it is never spending outside the budget.
+        outsideExpenseIds: {
+          for (final e in expenses)
+            if (e.amount > 0) ?e.id,
+        },
       );
     }
     // Oldest first: the envelope is used up in the order money was spent.
-    final ordered = [...expenses]..sort((a, b) {
+    final ordered = [...expenses]
+      ..sort((a, b) {
         final c = a.date.compareTo(b.date);
         if (c != 0) return c;
         final ai = int.tryParse(a.id ?? ''), bi = int.tryParse(b.id ?? '');
@@ -86,12 +91,15 @@ class EnvelopeMath {
       final before = spentBy[pot] ?? 0;
       final after = before + e.amount;
       spentBy[pot] = after;
-      final inside = (cap - before).clamp(0.0, e.amount).toDouble();
-      used += inside;
-      if (e.amount - inside > 0.005) {
-        outside += e.amount - inside;
-        if (e.id != null) outsideIds.add(e.id!);
-      }
+      // What moves inside the share and beyond it. A refund (negative
+      // amount) gives back to what was spent beyond the share first, then
+      // to the share itself.
+      double within(double spent) => spent.clamp(0.0, cap).toDouble();
+      double beyond(double spent) => spent > cap ? spent - cap : 0.0;
+      used += within(after) - within(before);
+      final extra = beyond(after) - beyond(before);
+      outside += extra;
+      if (extra > 0.005 && e.id != null) outsideIds.add(e.id!);
     }
     return EnvelopeMonth(
       total: env.total,
@@ -99,10 +107,7 @@ class EnvelopeMath {
       outside: outside,
       leftByWallet: env.shared
           ? const {}
-          : {
-              for (final f in env.funds.entries)
-                f.key: (f.value - (spentBy[f.key] ?? 0)).clamp(0, double.infinity).toDouble(),
-            },
+          : {for (final f in env.funds.entries) f.key: (f.value - (spentBy[f.key] ?? 0)).clamp(0.0, f.value).toDouble()},
       outsideExpenseIds: outsideIds,
     );
   }

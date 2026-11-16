@@ -20,6 +20,7 @@ import 'state/app_state.dart';
 import 'state/plan_state.dart';
 import 'state/session_state.dart';
 import 'theme/app_theme.dart';
+import 'widgets/glass.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,7 +40,7 @@ Future<void> main() async {
       Provider.value(value: subscriptions),
       ChangeNotifierProvider.value(value: session),
     ],
-    child: const EcoBudgetApp(),
+    child: const TawfirApp(),
   ));
 }
 
@@ -55,8 +56,8 @@ Future<bool> _firebaseReady() async {
   }
 }
 
-class EcoBudgetApp extends StatelessWidget {
-  const EcoBudgetApp({super.key});
+class TawfirApp extends StatelessWidget {
+  const TawfirApp({super.key});
 
   /// First launch: the three-step introduction. Then the sign-in screen
   /// until someone is signed in, then their data.
@@ -73,7 +74,7 @@ class EcoBudgetApp extends StatelessWidget {
     final app = MaterialApp(
       // Texts are looked up when built: a new language rebuilds everything.
       key: ValueKey('lang-${language.name}'),
-      title: 'EcoBudget',
+      title: 'Tawfir',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.build(Brightness.light),
       darkTheme: AppTheme.build(Brightness.dark),
@@ -81,6 +82,7 @@ class EcoBudgetApp extends StatelessWidget {
       locale: language.locale,
       supportedLocales: [for (final l in AppLanguage.values) l.locale],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      builder: (context, child) => _WideLayout(child: child!),
       home: user != null
           ? const HomeShell()
           : session.introSeen
@@ -101,6 +103,35 @@ class EcoBudgetApp extends StatelessWidget {
         ),
       ],
       child: app,
+    );
+  }
+}
+
+/// On wide screens (tablets in landscape, desktop windows), the app keeps a
+/// phone-like column in the middle of the backdrop instead of stretching
+/// cards and text across the whole width. Layouts measuring the screen see
+/// the column's width.
+class _WideLayout extends StatelessWidget {
+  const _WideLayout({required this.child});
+
+  final Widget child;
+
+  static const _maxWidth = 600.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    if (media.size.width <= _maxWidth + 80) return child;
+    return GlowBackdrop(
+      child: Center(
+        child: SizedBox(
+          width: _maxWidth,
+          child: MediaQuery(
+            data: media.copyWith(size: Size(_maxWidth, media.size.height)),
+            child: ClipRect(child: child),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:eco_budget/data/repository.dart';
 import 'package:eco_budget/models/category.dart';
+import 'package:eco_budget/models/debt.dart';
 import 'package:eco_budget/models/currency.dart';
 import 'package:eco_budget/models/deposit.dart';
 import 'package:eco_budget/models/expense.dart';
@@ -69,7 +70,14 @@ class _MemoryRepo implements BudgetRepository {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   }) async {}
+  @override
+  Future<List<Debt>> debts() async => [];
+  @override
+  Future<void> saveDebt(Debt d) async {}
+  @override
+  Future<void> deleteDebt(String id) async {}
 }
 
 Wallet _w(String id, WalletType type, int month, {String? currency, double? rate}) =>

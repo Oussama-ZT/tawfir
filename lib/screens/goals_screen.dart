@@ -52,7 +52,7 @@ class GoalsScreen extends StatelessWidget {
                 icon: Icons.savings_outlined,
                 title: tr('Épargnez pour un projet'),
                 message:
-                    tr('Un voyage, un fonds d\'urgence, un ordinateur : fixez un montant et une date, EcoBudget calcule combien mettre de côté chaque mois.'),
+                    tr('Un voyage, un fonds d\'urgence, un ordinateur : fixez un montant et une date, Tawfir calcule combien mettre de côté chaque mois.'),
                 action: FilledButton(onPressed: () => showGoalForm(context), child: Text(tr('Créer un objectif'))),
               ),
             )

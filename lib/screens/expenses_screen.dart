@@ -31,7 +31,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(tr('Dépense de {0} supprimée', [money(e.amount)])),
+        content: Text(e.isRefund
+            ? tr('Remboursement de {0} supprimé', [money(e.amount.abs())])
+            : tr('Dépense de {0} supprimée', [money(e.amount)])),
         action: SnackBarAction(label: tr('Annuler'), onPressed: () => state.addExpense(e)),
       ));
   }

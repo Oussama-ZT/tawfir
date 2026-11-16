@@ -1,4 +1,5 @@
 import '../models/category.dart';
+import '../models/debt.dart';
 import '../models/deposit.dart';
 import '../models/expense.dart';
 import '../models/savings_goal.dart';
@@ -55,6 +56,13 @@ abstract class BudgetRepository {
   Future<void> saveDeposit(Deposit d);
   Future<void> deleteDeposit(String id);
 
+  /// Money lent and borrowed, with their repayments.
+  Future<List<Debt>> debts();
+
+  /// Creates or updates (the id is set by the caller).
+  Future<void> saveDebt(Debt d);
+  Future<void> deleteDebt(String id);
+
   /// Replaces all of the user's data (demo data, reset).
   Future<void> replaceAll({
     required List<Expense> expenses,
@@ -63,6 +71,7 @@ abstract class BudgetRepository {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   });
 }
 
@@ -131,6 +140,15 @@ class LocalRepository implements BudgetRepository {
   Future<void> deleteDeposit(String id) => _db.deleteDeposit(_userId, id);
 
   @override
+  Future<List<Debt>> debts() => _db.debts(_userId);
+
+  @override
+  Future<void> saveDebt(Debt d) => _db.saveDebt(_userId, d);
+
+  @override
+  Future<void> deleteDebt(String id) => _db.deleteDebt(_userId, id);
+
+  @override
   Future<void> replaceAll({
     required List<Expense> expenses,
     required Map<String, double> budgets,
@@ -138,6 +156,7 @@ class LocalRepository implements BudgetRepository {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   }) =>
       _db.replaceAll(_userId,
           expenses: expenses,
@@ -145,5 +164,6 @@ class LocalRepository implements BudgetRepository {
           goals: goals,
           wallets: wallets,
           categories: categories,
-          deposits: deposits);
+          deposits: deposits,
+          debts: debts);
 }

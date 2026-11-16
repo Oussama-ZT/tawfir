@@ -31,8 +31,13 @@ class Expense {
 
   bool get isConverted => originalAmount != null && originalCurrency != null;
 
+  /// Money given back for a purchase, stored as a negative expense: totals
+  /// drop by it and the wallet gets it back.
+  bool get isRefund => amount < 0;
+
   /// Rate used when it was recorded (main currency per unit of the original).
-  double? get rate => isConverted && originalAmount! > 0 ? amount / originalAmount! : null;
+  /// A refund has both amounts negative, so the rate stays positive.
+  double? get rate => isConverted && originalAmount! != 0 ? amount / originalAmount! : null;
 
   Expense copyWith({String? id, double? amount, String? categoryId, DateTime? date, String? note, String? walletId}) {
     return Expense(
@@ -48,24 +53,24 @@ class Expense {
   }
 
   Map<String, Object?> toMap() => {
-        'id': id,
-        'amount': amount,
-        'category_id': categoryId,
-        'date': date.millisecondsSinceEpoch,
-        'note': note,
-        'wallet_id': walletId,
-        'original_amount': originalAmount,
-        'original_currency': originalCurrency,
-      };
+    'id': id,
+    'amount': amount,
+    'category_id': categoryId,
+    'date': date.millisecondsSinceEpoch,
+    'note': note,
+    'wallet_id': walletId,
+    'original_amount': originalAmount,
+    'original_currency': originalCurrency,
+  };
 
   factory Expense.fromMap(Map<String, Object?> map) => Expense(
-        id: map['id']?.toString(),
-        amount: (map['amount'] as num).toDouble(),
-        categoryId: map['category_id'] as String,
-        date: DateTime.fromMillisecondsSinceEpoch(map['date'] as int),
-        note: (map['note'] as String?) ?? '',
-        walletId: map['wallet_id'] as String?,
-        originalAmount: (map['original_amount'] as num?)?.toDouble(),
-        originalCurrency: map['original_currency'] as String?,
-      );
+    id: map['id']?.toString(),
+    amount: (map['amount'] as num).toDouble(),
+    categoryId: map['category_id'] as String,
+    date: DateTime.fromMillisecondsSinceEpoch(map['date'] as int),
+    note: (map['note'] as String?) ?? '',
+    walletId: map['wallet_id'] as String?,
+    originalAmount: (map['original_amount'] as num?)?.toDouble(),
+    originalCurrency: map['original_currency'] as String?,
+  );
 }

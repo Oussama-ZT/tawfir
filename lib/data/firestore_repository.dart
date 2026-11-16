@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/category.dart';
+import '../models/debt.dart';
 import '../models/deposit.dart';
 import '../models/expense.dart';
 import '../models/savings_goal.dart';
@@ -20,6 +21,7 @@ import 'repository.dart';
 ///   users/{uid}/wallets/{id}          name, type, created_at
 ///   users/{uid}/categories/{id}       label, icon, color (custom categories)
 ///   users/{uid}/deposits/{id}         wallet_id, amount, date, kind, note, source_*
+///   users/{uid}/debts/{id}            person, direction, due_date, note, created_at, entries (JSON)
 ///
 /// Firestore keeps a copy on the phone, so the app works offline and syncs
 /// later. Writes are not awaited: offline, a write only completes once the
@@ -35,8 +37,9 @@ class FirestoreRepository implements BudgetRepository {
   CollectionReference<Map<String, dynamic>> get _wallets => _user.collection('wallets');
   CollectionReference<Map<String, dynamic>> get _categories => _user.collection('categories');
   CollectionReference<Map<String, dynamic>> get _deposits => _user.collection('deposits');
+  CollectionReference<Map<String, dynamic>> get _debts => _user.collection('debts');
   List<CollectionReference<Map<String, dynamic>>> get _all =>
-      [_expenses, _budgets, _goals, _wallets, _categories, _deposits];
+      [_expenses, _budgets, _goals, _wallets, _categories, _deposits, _debts];
 
   static void _write(Future<void> f) => unawaited(f.catchError((Object e) => debugPrint('Firestore: $e')));
 
@@ -142,6 +145,19 @@ class FirestoreRepository implements BudgetRepository {
   Future<void> deleteDeposit(String id) async => _write(_deposits.doc(id).delete());
 
   @override
+  Future<List<Debt>> debts() async {
+    final snap = await _debts.get();
+    return [for (final d in snap.docs) Debt.fromMap({...d.data(), 'id': d.id})]
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  }
+
+  @override
+  Future<void> saveDebt(Debt d) async => _write(_debts.doc(d.id).set(_fields(d.toMap())));
+
+  @override
+  Future<void> deleteDebt(String id) async => _write(_debts.doc(id).delete());
+
+  @override
   Future<void> replaceAll({
     required List<Expense> expenses,
     required Map<String, double> budgets,
@@ -149,6 +165,7 @@ class FirestoreRepository implements BudgetRepository {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   }) async {
     final ops = <void Function(WriteBatch)>[];
     for (final c in _all) {
@@ -171,6 +188,9 @@ class FirestoreRepository implements BudgetRepository {
     }
     for (final d in deposits) {
       ops.add((b) => b.set(_deposits.doc(d.id), _fields(d.toMap())));
+    }
+    for (final d in debts) {
+      ops.add((b) => b.set(_debts.doc(d.id), _fields(d.toMap())));
     }
     // A batch holds at most 500 writes.
     for (var i = 0; i < ops.length; i += 450) {

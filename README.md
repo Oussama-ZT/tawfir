@@ -1,4 +1,4 @@
-# EcoBudget
+# Tawfir
 
 Application mobile de gestion financière personnelle (Android et iOS, Flutter).
 
@@ -7,7 +7,7 @@ Application mobile de gestion financière personnelle (Android et iOS, Flutter).
 | Exigence | Où dans l'app |
 |---|---|
 | Introduction | Au tout premier lancement : 3 étapes (noter une dépense, la jauge du budget, les conseils et objectifs), avec « Passer » |
-| Visite guidée | À la première arrivée sur l'accueil : 6 étapes qui éclairent les vrais éléments (carte du budget, portefeuilles, bouton +, onglets Dépenses et Budgets, profil). « Passer la visite » ou toucher n'importe où pour avancer ; à revoir depuis **Profil → Revoir la visite guidée** (`lib/widgets/tour.dart`) |
+| Visite guidée | À la première arrivée sur l'accueil : 6 étapes qui éclairent les vrais éléments (carte du budget, portefeuilles, bouton +, onglets Dépenses et Autres, profil). À la première ouverture de l'onglet **Autres**, une deuxième visite de 4 étapes passe sur chaque case (Budgets, Objectifs, Bilan, Dettes) et ouvre sa section. « Passer la visite » ou toucher n'importe où pour avancer ; à revoir depuis **Profil → Revoir la visite guidée** (la visite d'Autres revient aussi à la prochaine ouverture de l'onglet) (`lib/widgets/tour.dart`) |
 | Compte utilisateur | **Continuer avec Google**, **Continuer avec Apple** (iPhone) ou e-mail ; session mémorisée ; déconnexion et suppression du compte dans **Profil** (avatar en haut de l'accueil) |
 | Formules Starter / Pro / Premium | **Profil → Formule** : tableau comparatif ; limites définies dans `lib/models/plan.dart` |
 | Portefeuilles | **Profil → Portefeuilles** : espèces, compte bancaire, carte, épargne… ; chacun peut avoir sa propre devise (ex. Paysera en euros, avec votre taux de change) ; chaque dépense est liée à un portefeuille ; filtre dans **Dépenses**, total du mois sur l'**Accueil** |
@@ -16,24 +16,50 @@ Application mobile de gestion financière personnelle (Android et iOS, Flutter).
 | Trois langues | Français, anglais et arabe (de droite à gauche), dans **Profil → Langue** ou sur l'écran de connexion ; « Automatique » suit la langue du téléphone |
 | Devise universelle | 26 devises au choix à l'inscription (devinée d'après la région du téléphone), modifiable dans **Profil** |
 | Enregistrement et catégorisation des dépenses | Bouton **+** de la barre du bas (10 catégories, date, note) ; onglet **Dépenses** : filtrer, modifier en touchant, supprimer en glissant |
-| Budgets mensuels | Onglet **Budgets** : budget global en **enveloppe** (argent réservé dans les portefeuilles, voir plus bas) + budgets par catégorie |
-| Graphiques | **Accueil** : jauge du mois et répartition par catégorie ; **Budgets** : six derniers mois avec ligne de budget |
-| Suivi des objectifs d'épargne | Onglet **Budgets → Objectifs** : montant visé, échéance, versements / retraits, épargne mensuelle nécessaire |
+| Scanner un QR code | **Scanner** en haut du formulaire de nouvelle dépense : le QR code d'un ticket ou d'un paiement remplit le montant, la note (le commerçant), la date et le portefeuille dans la bonne devise, quand le code les contient. Formats lus : QR de paiement EMVCo, e-facture ZATCA, liens de paiement (`upi://…?am=`), tickets fiscaux (`t=…&s=…`), JSON et texte (« TOTAL TTC 1 250,00 DA »). Rien n'est deviné ; on vérifie avant d'ajouter (`lib/services/qr_receipt.dart`) |
+| Budgets mensuels | Onglet **Autres → Budgets** : budget du mois automatique (revenu − épargne) ou manuel, avec ce qu'on peut dépenser par jour ; budgets par catégorie ; **Bilan** du mois (voir plus bas) |
+| Graphiques | **Accueil** : jauge du mois et répartition par catégorie ; **Autres → Budgets** : six derniers mois avec ligne de budget ; **Autres → Bilan** : revenus et dépenses sur six mois |
+| Suivi des objectifs d'épargne | Onglet **Autres → Objectifs** : montant visé, échéance, versements / retraits, épargne mensuelle nécessaire |
+| Dettes (prêts et emprunts) | Onglet **Autres → Dettes** (Pro et Premium) : « J'ai prêté » ou « J'ai emprunté », la personne, le montant, le portefeuille utilisé (ou aucun, pour une dette d'avant l'app), une échéance facultative. Remboursements partiels, prêts supplémentaires, historique ; total « On vous doit » / « Vous devez » ; les dettes en retard passent en tête et un point rouge s'affiche sur la case (voir plus bas) |
 | Innovation : recommandations et dépenses inhabituelles | **Conseils** sur l'accueil, liste complète via « Tout voir » ; alerte immédiate à l'ajout d'une dépense inhabituelle |
 
 Pour une présentation : **Profil → Charger les données de démo** (5 mois d'exemples).
 
-## Le budget en enveloppe
+## Le budget du mois
 
-Le budget du mois est de l'argent **réservé dans un ou plusieurs portefeuilles** (onglet Budgets → toucher la carte du budget).
+**Deux modes** (onglet Autres → Budgets → toucher la carte du budget) :
 
-- L'argent reste dans le portefeuille, mais il est mis de côté. La carte du portefeuille affiche ce qui est **libre**, et le détail « Libre / Réservé au budget / Total ».
-- Chaque dépense est prise sur la part du portefeuille qui la paie. Au-delà de cette part, ou depuis un portefeuille qui ne finance pas le budget, la dépense est **hors budget** : elle est marquée en rose dans les listes, et le formulaire de dépense le signale avant l'enregistrement.
-- La carte du budget affiche ce qui reste dans l'enveloppe. Elle devient rouge quand l'enveloppe est vide et que des dépenses continuent hors budget.
-- Le même budget est réservé automatiquement chaque mois. Au début du mois suivant, l'accueil demande où va le reste : **le rendre aux portefeuilles** (il redevient libre) ou **le mettre dans un objectif** (il sort des portefeuilles et s'ajoute à l'objectif).
-- Exemple : 75 000 DA en espèces, 35 000 DA réservés, un achat de 2 000 DA → il reste 73 000 DA dans le portefeuille, dont 40 000 DA libres et 33 000 DA dans l'enveloppe.
+- **Automatique** (par défaut pour un nouveau compte) : budget = revenu mensuel − épargne voulue (en % ou en montant). Exemple : 80 000 DA de revenu, 20 000 DA d'épargne → 60 000 DA de budget. Le revenu est soit **saisi**, soit celui **réellement enregistré** (moyenne des trois derniers mois complets ayant des revenus) : dans ce cas le budget se recalcule quand un revenu est ajouté, modifié ou supprimé. Sans revenu, aucun budget n'est inventé : l'app demande le revenu ou le mode manuel.
+- **Manuel** : le montant est saisi. Un budget créé avant cette version reste en manuel, avec son montant.
 
-Les réglages de l'enveloppe sont stockés avec les budgets (clés `fund:<portefeuille>`, `closed:<mois>`, `envelope:since`). Un budget créé avant les enveloppes fonctionne comme avant (toutes les dépenses comptent) jusqu'à ce que l'utilisateur choisisse ses portefeuilles. Calculs dans `lib/services/envelope_math.dart`, testés dans `test/envelope_test.dart`.
+**Toutes les dépenses du mois comptent**, quel que soit le portefeuille. Les transferts entre portefeuilles, les retraits et les corrections de solde ne sont jamais des dépenses.
+
+- Reste = budget − dépenses du mois (jamais négatif : le dépassement est affiché à part).
+- **Par jour** = reste ÷ jours restants (aujourd'hui compris). Dépenser moins augmente ce montant pour les jours suivants, dépenser plus le réduit. Le dernier jour, tout le reste est pour aujourd'hui ; un mois terminé donne 0, sans division par zéro.
+- Couleur de la carte : indigo dans le budget, orange à partir de 80 % utilisé, rouge au-delà.
+- Tout se recalcule à l'ajout, la modification ou la suppression d'une dépense, et au changement de budget. Le formulaire de dépense affiche ce qui restera après la dépense.
+
+**Remboursements** : dans le formulaire de dépense, « Remboursement » enregistre l'argent rendu pour un achat (montant négatif). Il réduit les dépenses du mois et de sa catégorie et revient dans le portefeuille ; il n'est ni compté comme dépense dans le bilan, ni analysé comme dépense inhabituelle.
+
+**Budgets par catégorie** (facultatifs) : ils répartissent le budget du mois sans jamais l'augmenter. Une catégorie ne peut pas recevoir plus que ce qui n'est pas encore réparti ; sans budget mensuel, l'app demande d'abord de le fixer. Toucher une catégorie affiche son budget, ce qui reste, son historique sur six mois et ses dépenses.
+
+**Réserver dans les portefeuilles** (facultatif) : une partie du budget peut être réservée dans un ou plusieurs portefeuilles ; leur carte affiche alors ce qui est libre et ce qui est réservé. Les réservations ne dépassent jamais le budget (elles sont réduites si le budget baisse). Au début du mois suivant, l'accueil demande où va le reste : le rendre aux portefeuilles ou le mettre dans un objectif.
+
+**Bilan** (onglet Autres → Bilan) : pour chaque mois, revenus, dépenses, épargne nette, moyenne par jour, nombre de dépenses, première catégorie, plus grosse dépense, part du budget utilisée et évolution par rapport au mois précédent, avec un graphique revenus / dépenses sur six mois. Les revenus sont les ajouts d'argent de type revenu (convertis pour les portefeuilles en devises). Chaque mois garde **son** budget, et chaque catégorie aussi : ils sont enregistrés quand ils changent (`hist:AAAA-MM`, `histc:<catégorie>@AAAA-MM`), et un mois passé utilise le dernier montant enregistré à cette date. Avant cette version, un seul budget s'appliquait à tous les mois : il est enregistré une fois à partir du premier mois contenant des dépenses. Aucun montant n'est supposé pour les mois antérieurs.
+
+**Grands écrans** (tablette en paysage, fenêtre d'ordinateur) : l'app garde une colonne de 600 px centrée sur le fond, au lieu d'étirer cartes et textes sur toute la largeur. La version Windows nécessite Visual Studio (C++) pour être compilée, et la version macOS un Mac.
+
+Aucune migration de base de données : préférences et historique sont stockés avec les budgets (`cfg:mode`, `cfg:income`, `cfg:incomeSrc`, `cfg:savingsPct`, `cfg:savingsAmt`, `cfg:manual`, `hist:AAAA-MM`, `histc:<catégorie>@AAAA-MM`, `fund:<portefeuille>`, `closed:<mois>`). `total` contient toujours le budget en vigueur. Calculs dans `lib/services/budget_math.dart`, testés dans `test/budget_math_test.dart`.
+
+## Dettes
+
+L'onglet **Autres** (barre du bas) montre quatre cases : **Budgets**, **Objectifs**, **Bilan** et **Dettes** ; la case touchée choisit ce qui s'affiche dessous. Les dettes sont réservées à **Pro et Premium** : en Starter, la case porte un cadenas et propose les formules.
+
+Une dette est de l'argent **prêté** (la personne vous doit) ou **emprunté** (vous lui devez). Prêter prend l'argent dans le portefeuille choisi, et le remboursement l'y remet (dans n'importe quel portefeuille) ; emprunter fait l'inverse. Ces mouvements apparaissent dans l'historique du portefeuille (« Prêt à Karim », « Remboursement de Karim »…) et changent son solde, mais ce ne sont **ni des dépenses ni des revenus** : le budget, le bilan et les revenus enregistrés les ignorent. Avec « Aucun portefeuille », aucun solde ne change (dette d'avant l'app).
+
+La dette garde son propre historique (`debts.entries`, en JSON) : ce qui reste à rendre ne dépend jamais des portefeuilles. Chaque mouvement passé par un portefeuille a un dépôt de type `debt` portant le même identifiant ; modifier ou supprimer la dette met ces dépôts à jour. Supprimer un portefeuille garde les dettes justes (ses mouvements de dette deviennent « hors portefeuille », et son argent part dans le portefeuille choisi). Les dettes sont comptées dans la devise principale : seuls les portefeuilles dans cette devise sont proposés.
+
+Base de données : version 6, qui **ajoute** la table `debts` sans toucher aux données existantes (Firestore : `users/{uid}/debts`).
 
 ## Supprimer un portefeuille
 
@@ -75,6 +101,7 @@ L'application a deux modes, choisis automatiquement au démarrage :
 | Catégories personnalisées | Non | Oui | Oui |
 | Objectifs d'épargne | 2 | Illimités | Illimités |
 | Budgets par catégorie | 3 | Illimités | Illimités |
+| Dettes (prêts et emprunts) | Non | Oui | Oui |
 | Conseils et alertes | Oui | Oui | Oui |
 
 **Solde des portefeuilles** : le solde est suivi à partir du premier ajout d'argent (ou du premier « Indiquer le solde ») : solde = ajouts + transferts reçus − transferts envoyés − retraits − dépenses depuis cette date. Un **retrait** sort l'argent du portefeuille sans compter comme dépense (mis de côté, prêté, déposé ailleurs). Les dépenses plus anciennes ne le faussent pas. Les transferts ne comptent ni comme revenu ni comme dépense. Calcul dans [lib/services/wallet_math.dart](lib/services/wallet_math.dart).
@@ -91,6 +118,7 @@ Tout se règle dans [lib/models/plan.dart](lib/models/plan.dart).
 | Catégories personnalisées | aucune en Starter | plus proposées pour les nouvelles dépenses ; les anciennes dépenses les gardent |
 | Objectifs | les plus anciens, jusqu'à la limite | progression visible ; plus d'ajout ni de retrait |
 | Budgets par catégorie | les premiers dans l'ordre des catégories, jusqu'à la limite | affichés avec un cadenas, ignorés par les alertes |
+| Dettes | aucune en Starter | visibles avec ce qui reste à rendre et l'historique ; plus de remboursements, d'ajouts ni de modifications ; suppression possible. Leurs mouvements passés restent dans les soldes des portefeuilles |
 
 Se réabonner dégèle tout immédiatement. Règles dans `AppState` (section « freeze »), testées dans `test/freeze_test.dart`.
 
@@ -100,7 +128,7 @@ L'abonnement passe par **RevenueCat** (Google Play et App Store). Sans clés Rev
 
 ### 1. Firebase (comptes et base de données)
 
-1. Sur [console.firebase.google.com](https://console.firebase.google.com) : créer un projet **EcoBudget** (Google Analytics facultatif).
+1. Sur [console.firebase.google.com](https://console.firebase.google.com) : créer un projet **Tawfir** (Google Analytics facultatif).
 2. **Authentication → Commencer → Mode de connexion** : activer **Google**, **E-mail/Mot de passe** et **Apple**.
 3. **Firestore Database → Créer une base de données** (mode production, région `europe-west`), puis onglet **Règles** : coller le contenu de [firestore.rules](firestore.rules) et **Publier**.
 4. **Paramètres du projet → Ajouter une application → Android** : nom du package `com.ecobudget.eco_budget`, et l'empreinte **SHA-1** de chaque ordinateur qui compile l'app :
@@ -167,14 +195,14 @@ La version publiée reste en **mode test** : tant que RevenueCat n'est pas confi
 
 ### Android
 
-Fichiers prêts dans `release/` : `EcoBudget-1.0.0-test.apk` (installation directe) et `EcoBudget-1.0.0-test.aab` (Google Play). Pour les refaire : `flutter build apk --release` et `flutter build appbundle --release`.
+Fichiers prêts dans `release/` : `Tawfir-1.1.0-test.apk` (installation directe) et `Tawfir-1.1.0-test.aab` (Google Play). Pour les refaire : `flutter build apk --release` et `flutter build appbundle --release`.
 
 **Clé d'envoi** : `android/app/upload-keystore.jks` et son mot de passe dans `android/key.properties`. Les sauvegarder ailleurs (clé USB, coffre de mots de passe) : sans elles, impossible de publier une mise à jour sous la même application. Ces fichiers ne doivent jamais être envoyés sur GitHub (déjà dans `.gitignore`).
 
 Deux façons de donner un lien de téléchargement :
 
 1. **Google Play, test interne** (conseillé) : compte Google Play Console (25 $, une fois) → Créer une application → *Tester → Test interne* → importer le `.aab` → ajouter les e-mails des testeurs → copier le **lien de participation**. Les testeurs installent depuis Play Store et reçoivent les mises à jour. Jusqu'à 100 testeurs, sans examen long.
-2. **Lien direct vers l'APK** : déposer `EcoBudget-1.0.0-test.apk` sur Google Drive, GitHub Releases ou un site, et partager le lien. Le testeur doit autoriser « Installer des applications inconnues ». Les mises à jour se font à la main.
+2. **Lien direct vers l'APK** : déposer `Tawfir-1.1.0-test.apk` sur Google Drive, GitHub Releases ou un site, et partager le lien. Le testeur doit autoriser « Installer des applications inconnues ». Les mises à jour se font à la main.
 
 ### iOS (TestFlight)
 
@@ -182,9 +210,9 @@ Il faut un Mac pour compiler l'app iOS. Sans Mac, `codemagic.yaml` la fait compi
 
 1. **Apple Developer Program** (99 $/an) sur developer.apple.com.
 2. **Identifiant** : *Certificates, Identifiers & Profiles → Identifiers* → App ID `com.ecobudget.ecoBudget`.
-3. **App Store Connect** → *Apps → +* → nouvelle app iOS avec cet identifiant (nom : EcoBudget, ou un autre s'il est pris).
+3. **App Store Connect** → *Apps → +* → nouvelle app iOS avec cet identifiant (nom : Tawfir, ou un autre s'il est pris).
 4. **Clé API** : App Store Connect → *Utilisateurs et accès → Intégrations → App Store Connect API* → nouvelle clé (rôle *App Manager*) ; noter l'Issuer ID, le Key ID et télécharger le fichier `.p8`.
-5. **Codemagic** (codemagic.io, offre gratuite) : connecter le dépôt Git du projet, puis *Team → Integrations → App Store Connect* avec la clé ci-dessus, nommée exactement `EcoBudget App Store Connect`.
+5. **Codemagic** (codemagic.io, offre gratuite) : connecter le dépôt Git du projet, puis *Team → Integrations → App Store Connect* avec la clé ci-dessus, nommée exactement `Tawfir App Store Connect`.
 6. Lancer le workflow **iOS → TestFlight**. Le build arrive dans App Store Connect → *TestFlight* : ajouter des testeurs internes (immédiat), ou un groupe externe avec un **lien public** (après une courte vérification d'Apple).
 
 Avec un Mac : ouvrir `ios/Runner.xcworkspace` dans Xcode, choisir l'équipe dans *Signing & Capabilities*, puis *Product → Archive → Distribute App → App Store Connect*.

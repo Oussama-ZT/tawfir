@@ -27,7 +27,7 @@ class InsightsScreen extends StatelessWidget {
           ? EmptyState(
               icon: Icons.lightbulb_outline_rounded,
               title: tr('Rien à signaler'),
-              message: tr('Continuez à noter vos dépenses : EcoBudget apprend vos habitudes pour repérer ce qui sort de l\'ordinaire.'),
+              message: tr('Continuez à noter vos dépenses : Tawfir apprend vos habitudes pour repérer ce qui sort de l\'ordinaire.'),
             )
           : ListView(
               padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 32),

@@ -74,6 +74,8 @@ class DashboardScreen extends StatelessWidget {
             key: TourKeys.budgetCard,
             child: BudgetCard(month: now, onTap: () => onNavigate(HomeShell.budgets)),
           ),
+          const SizedBox(height: 14),
+          const _MonthFigures(),
           if (state.wallets.isNotEmpty) ...[
             SectionHeader(
               state.hasSeveralWallets ? tr('Portefeuilles') : tr('Portefeuille'),
@@ -137,7 +139,7 @@ class _StartChecklist extends StatelessWidget {
     final steps = [
       (
         tr('Fixez votre budget du mois'),
-        tr('EcoBudget vous préviendra avant un dépassement.'),
+        tr('Tawfir vous préviendra avant un dépassement.'),
         state.totalBudget > 0,
         () => onNavigate(HomeShell.budgets),
       ),
@@ -312,6 +314,47 @@ class _MonthCloseCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The month at a glance: what the wallets hold, what came in, what went out.
+class _MonthFigures extends StatelessWidget {
+  const _MonthFigures();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final eco = context.eco;
+    final now = DateTime.now();
+    final balance = app.totalBalance;
+    Widget tile(String label, String value, {Color? color}) => Expanded(
+          child: GlassPanel(
+            radius: 18,
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: context.type.labelSmall),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(value, style: context.type.titleSmall?.copyWith(fontFeatures: tabular, color: color)),
+                ),
+              ],
+            ),
+          ),
+        );
+    return Row(
+      children: [
+        tile(tr('Solde total'), balance.tracked == 0 ? '—' : money(balance.total),
+            color: balance.total < 0 ? eco.coral : null),
+        const SizedBox(width: 10),
+        tile(tr('Revenus'), money(app.incomeInMonth(now)), color: eco.leaf),
+        const SizedBox(width: 10),
+        tile(tr('Dépenses'), money(app.spentIn(now))),
+      ],
     );
   }
 }

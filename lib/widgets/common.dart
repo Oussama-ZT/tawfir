@@ -253,6 +253,8 @@ Future<double?> showAmountDialog(
   bool allowZero = false,
   String? confirmLabel,
   Currency? currency,
+  double? max,
+  String? maxError,
 }) {
   return showDialog<double>(
     context: context,
@@ -263,13 +265,27 @@ Future<double?> showAmountDialog(
       allowZero: allowZero,
       confirmLabel: confirmLabel ?? tr('Enregistrer'),
       currency: currency,
+      max: max,
+      maxError: maxError,
     ),
   );
 }
 
 class _AmountDialog extends StatefulWidget {
-  const _AmountDialog(
-      {required this.title, this.initial, this.helper, required this.allowZero, required this.confirmLabel, this.currency});
+  const _AmountDialog({
+    required this.title,
+    this.initial,
+    this.helper,
+    required this.allowZero,
+    required this.confirmLabel,
+    this.currency,
+    this.max,
+    this.maxError,
+  });
+
+  /// Highest amount accepted, with the message shown beyond it.
+  final double? max;
+  final String? maxError;
 
   final String title;
   final double? initial;
@@ -310,6 +326,10 @@ class _AmountDialogState extends State<_AmountDialog> {
     final value = parseAmount(text);
     if (value == null || value < 0 || (value == 0 && !widget.allowZero)) {
       setState(() => _error = tr('Entrez un montant supérieur à 0.'));
+      return;
+    }
+    if (widget.max != null && value > widget.max! + 0.005) {
+      setState(() => _error = widget.maxError ?? tr('Au plus {0}.', [money(widget.max!)]));
       return;
     }
     Navigator.pop(context, value);

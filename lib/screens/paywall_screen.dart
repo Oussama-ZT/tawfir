@@ -276,6 +276,7 @@ class _PlanTable extends StatelessWidget {
       (tr('Catégories personnalisées'), (p) => _check(context, p.customCategories)),
       (tr('Objectifs d\'épargne'), (p) => _text(context, _count(p.goalLimit))),
       (tr('Budgets par catégorie'), (p) => _text(context, _count(p.categoryBudgetLimit))),
+      (tr('Prêts et emprunts'), (p) => _check(context, p.debts)),
       (tr('Conseils et alertes'), (p) => _check(context, true)),
     ];
 

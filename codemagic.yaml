@@ -8,7 +8,7 @@ workflows:
     max_build_duration: 60
     integrations:
       # App Store Connect API key added in Codemagic > Team > Integrations.
-      app_store_connect: EcoBudget App Store Connect
+      app_store_connect: Tawfir App Store Connect
     environment:
       flutter: stable
       xcode: latest

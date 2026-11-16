@@ -13,10 +13,16 @@ class TourKeys {
   static final expensesTab = GlobalKey(debugLabel: 'tour-expenses');
   static final budgetsTab = GlobalKey(debugLabel: 'tour-budgets');
   static final profile = GlobalKey(debugLabel: 'tour-profile');
+
+  /// The four boxes of the Autres tab.
+  static final othersBudgets = GlobalKey(debugLabel: 'tour-others-budgets');
+  static final othersGoals = GlobalKey(debugLabel: 'tour-others-goals');
+  static final othersReport = GlobalKey(debugLabel: 'tour-others-report');
+  static final othersDebts = GlobalKey(debugLabel: 'tour-others-debts');
 }
 
 class TourStep {
-  const TourStep({required this.target, required this.title, required this.body, this.round = false});
+  const TourStep({required this.target, required this.title, required this.body, this.round = false, this.onShow});
 
   final GlobalKey target;
   final String title;
@@ -24,6 +30,9 @@ class TourStep {
 
   /// A round spotlight (buttons) instead of a rounded rectangle.
   final bool round;
+
+  /// Runs as the step comes up, e.g. to open the section it talks about.
+  final VoidCallback? onShow;
 }
 
 /// The first-visit tour of the home screen.
@@ -31,7 +40,9 @@ List<TourStep> get homeTour => [
   TourStep(
     target: TourKeys.budgetCard,
     title: tr('Votre budget du mois'),
-    body: tr('Ce qui reste dans l\'enveloppe du mois. Les tubes s\'allument jour après jour à mesure que vous dépensez. Touchez la carte pour fixer ou modifier votre budget.'),
+    body: tr(
+      'Ce qui reste à dépenser ce mois-ci, et combien par jour. Les tubes s\'allument à mesure que vous dépensez ; la carte devient orange près de la limite, rouge au-delà. Touchez-la pour fixer votre budget.',
+    ),
   ),
   TourStep(
     target: TourKeys.wallets,
@@ -51,14 +62,49 @@ List<TourStep> get homeTour => [
   ),
   TourStep(
     target: TourKeys.budgetsTab,
-    title: tr('Budgets et objectifs'),
-    body: tr('Le budget du mois, des limites par catégorie, et vos objectifs d\'épargne.'),
+    title: tr('Autres'),
+    body: tr('Quatre cases pour choisir : le budget du mois, vos objectifs d\'épargne, le bilan du mois, et l\'argent prêté ou emprunté.'),
   ),
   TourStep(
     target: TourKeys.profile,
     title: tr('Votre profil'),
     body: tr('Devise, formule, catégories, mode clair ou sombre. Vous pourrez y revoir cette visite.'),
     round: true,
+  ),
+];
+
+/// The first visit of the Autres tab: one step per box. [select] opens the
+/// box's section so what is described shows below it.
+List<TourStep> othersTour({required void Function(int section) select, required bool debtsLocked}) => [
+  TourStep(
+    target: TourKeys.othersBudgets,
+    title: tr('Budgets'),
+    body: tr(
+      'Le budget du mois et sa répartition par catégorie. Touchez la carte du budget pour fixer le montant, ou le calculer depuis vos revenus.',
+    ),
+    onShow: () => select(0),
+  ),
+  TourStep(
+    target: TourKeys.othersGoals,
+    title: tr('Objectifs d\'épargne'),
+    body: tr('Mettez de l\'argent de côté pour un projet : montant visé, échéance, et ce qu\'il faut épargner chaque mois pour y arriver.'),
+    onShow: () => select(1),
+  ),
+  TourStep(
+    target: TourKeys.othersReport,
+    title: tr('Bilan du mois'),
+    body: tr('Revenus, dépenses et épargne du mois, comparés au mois d\'avant et aux six derniers mois.'),
+    onShow: () => select(2),
+  ),
+  TourStep(
+    target: TourKeys.othersDebts,
+    title: tr('Dettes'),
+    body: debtsLocked
+        ? tr('L\'argent prêté ou emprunté : qui vous doit, à qui vous devez, et ce qui reste à rendre. Inclus dans Pro et Premium.')
+        : tr(
+            'L\'argent prêté ou emprunté : qui vous doit, à qui vous devez, et ce qui reste à rendre. Le point rouge signale une échéance dépassée.',
+          ),
+    onShow: () => select(3),
   ),
 ];
 
@@ -70,7 +116,10 @@ void showTour(BuildContext context, List<TourStep> steps, {required VoidCallback
   late final OverlayEntry entry;
   entry = OverlayEntry(
     builder: (_) => _Tour(
-      steps: [for (final s in steps) if (s.target.currentContext != null) s],
+      steps: [
+        for (final s in steps)
+          if (s.target.currentContext != null) s,
+      ],
       onDone: () {
         entry.remove();
         onDone();
@@ -117,8 +166,20 @@ class _TourState extends State<_Tour> with SingleTickerProviderStateMixin {
     return Rect.lerp(_from ?? _to, _to, t) ?? Rect.zero;
   }
 
-  /// Scrolls the step's target into view, then slides the spotlight to it.
+  /// Runs the step's [TourStep.onShow], then points at its target.
   Future<void> _focus(int i) async {
+    final show = widget.steps[i].onShow;
+    if (show != null) {
+      show();
+      // Let the section it opened lay out before measuring.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+    }
+    await _spotlight(i);
+  }
+
+  /// Scrolls the step's target into view, then slides the spotlight to it.
+  Future<void> _spotlight(int i) async {
     final target = widget.steps[i].target.currentContext;
     if (target == null) return _next();
     final reduce = MediaQuery.disableAnimationsOf(context);
@@ -172,7 +233,9 @@ class _TourState extends State<_Tour> with SingleTickerProviderStateMixin {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _next,
-                  child: CustomPaint(painter: _SpotlightPainter(hole: hole, ring: eco.yellow, scrim: _scrim(eco))),
+                  child: CustomPaint(
+                    painter: _SpotlightPainter(hole: hole, ring: eco.yellow, scrim: _scrim(eco)),
+                  ),
                 ),
               ),
               if (hole != null && step != null)
@@ -181,14 +244,7 @@ class _TourState extends State<_Tour> with SingleTickerProviderStateMixin {
                   right: 16,
                   top: below ? (hole.bottom + 18).clamp(0, size.height - 260) : null,
                   bottom: below ? null : size.height - hole.top + 18,
-                  child: _Card(
-                    step: step,
-                    index: _index,
-                    count: widget.steps.length,
-                    last: last,
-                    onNext: _next,
-                    onSkip: widget.onDone,
-                  ),
+                  child: _Card(step: step, index: _index, count: widget.steps.length, last: last, onNext: _next, onSkip: widget.onDone),
                 ),
             ],
           );
@@ -225,10 +281,7 @@ class _SpotlightPainter extends CustomPainter {
       canvas.drawPath(screen, Paint()..color = scrim);
       return;
     }
-    canvas.drawPath(
-      Path.combine(PathOperation.difference, screen, Path()..addRRect(h)),
-      Paint()..color = scrim,
-    );
+    canvas.drawPath(Path.combine(PathOperation.difference, screen, Path()..addRRect(h)), Paint()..color = scrim);
     canvas.drawRRect(
       h,
       Paint()

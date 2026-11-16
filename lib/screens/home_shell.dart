@@ -58,15 +58,20 @@ class _HomeShellState extends State<HomeShell> {
     Future.delayed(const Duration(milliseconds: 700), () {
       if (!mounted) return;
       final session = context.read<SessionState>();
-      showTour(context, homeTour, onDone: () {
-        _touring = false;
-        session.finishTour();
-      });
+      showTour(
+        context,
+        homeTour,
+        onDone: () {
+          _touring = false;
+          session.finishTour();
+        },
+      );
     });
   }
 
   void _replayTour() {
     HomeShell.tab.value = HomeShell.home;
+    context.read<SessionState>().replayOthersTour();
     _startTour();
   }
 
@@ -109,18 +114,9 @@ class _HomeShellState extends State<HomeShell> {
           addAnchor: TourKeys.addButton,
           items: [
             EcoNavItem(Icons.home_outlined, Icons.home_rounded, tr('Accueil')),
-            EcoNavItem(
-              Icons.account_balance_wallet_outlined,
-              Icons.account_balance_wallet_rounded,
-              tr('Portefeuilles'),
-            ),
-            EcoNavItem(
-              Icons.receipt_long_outlined,
-              Icons.receipt_long_rounded,
-              tr('Dépenses'),
-              anchor: TourKeys.expensesTab,
-            ),
-            EcoNavItem(Icons.donut_small_outlined, Icons.donut_small_rounded, tr('Budgets'), anchor: TourKeys.budgetsTab),
+            EcoNavItem(Icons.account_balance_wallet_outlined, Icons.account_balance_wallet_rounded, tr('Portefeuilles')),
+            EcoNavItem(Icons.receipt_long_outlined, Icons.receipt_long_rounded, tr('Dépenses'), anchor: TourKeys.expensesTab),
+            EcoNavItem(Icons.grid_view_outlined, Icons.grid_view_rounded, tr('Autres'), anchor: TourKeys.budgetsTab),
           ],
         ),
       ),

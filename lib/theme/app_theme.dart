@@ -3,7 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../widgets/glass.dart';
 
-/// EcoBudget design tokens: "the budget as a neon sign".
+/// Tawfir design tokens: "the budget as a neon sign".
 ///
 /// Every screen sits on a soft field of blue and yellow light. Content lives
 /// on frosted glass panels that stay quiet; neon is spent in few places:

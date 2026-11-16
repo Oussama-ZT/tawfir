@@ -5,12 +5,14 @@ import 'package:flutter/foundation.dart';
 import '../data/demo_data.dart';
 import '../data/repository.dart';
 import '../models/category.dart';
+import '../models/debt.dart';
 import '../models/deposit.dart';
 import '../models/expense.dart';
 import '../models/insight.dart';
 import '../models/plan.dart';
 import '../models/savings_goal.dart';
 import '../models/wallet.dart';
+import '../services/budget_math.dart';
 import '../services/envelope_math.dart';
 import '../services/insights_service.dart';
 import '../services/wallet_math.dart';
@@ -33,6 +35,7 @@ class AppState extends ChangeNotifier {
   List<SavingsGoal> _goals = [];
   List<Wallet> _wallets = [];
   List<Deposit> _deposits = [];
+  List<Debt> _debts = [];
   List<Insight>? _insights;
 
   List<Expense> get expenses => _expenses;
@@ -118,6 +121,7 @@ class AppState extends ChangeNotifier {
     _goals = await _repo.goals();
     _wallets = await _repo.wallets();
     _deposits = await _repo.deposits();
+    _debts = await _repo.debts();
     ExpenseCategory.customList = await _repo.categories();
     if (_wallets.isEmpty) {
       final first = Wallet.starter(newId('w'));
@@ -133,6 +137,8 @@ class AppState extends ChangeNotifier {
     if (orphans.isNotEmpty) {
       _expenses = [for (final e in _expenses) orphans.contains(e) ? e.copyWith(walletId: first) : e];
     }
+    await _snapshotBudget();
+    await _refreshRecordedBudget();
     _loaded = true;
     _changed();
   }
@@ -140,6 +146,8 @@ class AppState extends ChangeNotifier {
   void _changed() {
     _insights = null;
     _envelopeMonths.clear();
+    _statuses.clear();
+    _overBudget.clear();
     notifyListeners();
   }
 
@@ -269,8 +277,11 @@ class AppState extends ChangeNotifier {
     for (final e in expensesIn(month)) {
       totals[e.categoryId] = (totals[e.categoryId] ?? 0) + e.amount;
     }
-    final list = [for (final t in totals.entries) MapEntry(ExpenseCategory.byId(t.key), t.value)]
-      ..sort((a, b) => b.value.compareTo(a.value));
+    // Refunds lower their category; one refunded beyond its spending is left out.
+    final list = [
+      for (final t in totals.entries)
+        if (t.value > 0.005) MapEntry(ExpenseCategory.byId(t.key), t.value),
+    ]..sort((a, b) => b.value.compareTo(a.value));
     return list;
   }
 
@@ -324,24 +335,287 @@ class AppState extends ChangeNotifier {
     } else {
       next[key] = amount;
     }
+    if (key != InsightsService.totalBudgetKey && !key.contains(':')) {
+      await _put(next, _categoryHistKey(key, DateTime.now()), amount > 0 ? amount : _noBudget);
+    }
     _budgets = next;
     _changed();
   }
 
-  // ------------------------------------------------------------ envelope --
+  // -------------------------------------------------------------- budget --
   //
-  // The global budget is an envelope: money reserved in wallets for the
-  // month's spending. Balances stay what is really in the wallets; the part
-  // still reserved is shown apart from what is free. Each expense uses up the
-  // share of the wallet that paid it; beyond it, the expense is outside the
-  // budget. At the end of a month, what is left goes back to the wallets or
-  // into a savings goal.
+  // One monthly budget, decided automatically (income − savings) or typed in.
+  // Every expense of the month counts against it, whatever the wallet;
+  // transfers, withdrawals and corrections never do. What can be spent per
+  // day is what is left divided by the days left. Part of the budget can be
+  // reserved in wallets: their cards then show what is free and what is
+  // reserved. At the end of a month, what is left goes back to the wallets
+  // or into a savings goal.
+  //
+  // Everything is kept in the budget store (no schema change): `total` is
+  // the budget in force, `cfg:` keys the preferences, `hist:YYYY-MM` the
+  // budget each month had, `fund:<wallet>` the reservations.
 
   static const fundPrefix = 'fund:';
   static const closedPrefix = 'closed:';
+  static const histPrefix = 'hist:';
   static const sinceKey = 'envelope:since';
+  static const modeKey = 'cfg:mode';
+  static const incomeKey = 'cfg:income';
+  static const savingsPercentKey = 'cfg:savingsPct';
+  static const savingsAmountKey = 'cfg:savingsAmt';
+  static const manualKey = 'cfg:manual';
+  static const incomeSourceKey = 'cfg:incomeSrc';
+  static const categoryHistPrefix = 'histc:';
+
+  /// Stands for "no budget" in a month snapshot: the store drops values <= 0.
+  static const _noBudget = 0.0001;
 
   final Map<DateTime, EnvelopeMonth> _envelopeMonths = {};
+  final Map<DateTime, BudgetStatus> _statuses = {};
+  final Map<DateTime, Set<String>> _overBudget = {};
+
+  BudgetConfig get budgetConfig {
+    final mode = _budgets[modeKey];
+    // Budgets set before modes existed were typed in: they stay manual.
+    final legacy = mode == null && totalBudget > 0;
+    final fromRecords = _budgets[incomeSourceKey] == 2;
+    return BudgetConfig(
+      mode: mode == 2 || legacy ? BudgetMode.manual : BudgetMode.automatic,
+      incomeFromRecords: fromRecords,
+      income: fromRecords ? recordedIncomeAverage : _budgets[incomeKey],
+      savingsPercent: _budgets[savingsPercentKey],
+      savingsAmount: _budgets[savingsAmountKey],
+      manualBudget: _budgets[manualKey] ?? (legacy ? totalBudget : null),
+    );
+  }
+
+  Future<void> _put(Map<String, double> next, String key, double? value) async {
+    if (value == null || value <= 0) {
+      if (next.containsKey(key)) await _repo.setBudget(key, 0);
+      next.remove(key);
+    } else {
+      await _repo.setBudget(key, value);
+      next[key] = value;
+    }
+  }
+
+  /// Saves the budget preferences. The monthly budget becomes what they
+  /// give (nothing when an automatic budget has no income). [funds] sets the
+  /// reservation in each wallet; without it, existing reservations are kept,
+  /// scaled down if they no longer fit in the budget.
+  Future<void> setBudgetConfig(BudgetConfig c, {Map<String, double>? funds}) async {
+    if (c.incomeFromRecords) {
+      // The income is always the one actually recorded, whatever was passed.
+      c = BudgetConfig(
+        mode: c.mode,
+        incomeFromRecords: true,
+        income: recordedIncomeAverage,
+        savingsPercent: c.savingsPercent,
+        savingsAmount: c.savingsAmount,
+        manualBudget: c.manualBudget,
+      );
+    }
+    final next = Map<String, double>.from(_budgets);
+    await _put(next, modeKey, c.mode == BudgetMode.manual ? 2 : 1);
+    // The average of recorded income changes by itself: only a typed
+    // income is stored.
+    await _put(next, incomeSourceKey, c.incomeFromRecords ? 2 : null);
+    if (!c.incomeFromRecords) await _put(next, incomeKey, c.income);
+    await _put(next, savingsAmountKey, c.savingsAmount);
+    await _put(next, savingsPercentKey, c.savingsAmount == null ? c.savingsPercent : null);
+    await _put(next, manualKey, c.manualBudget);
+    final budget = c.budget ?? 0;
+    await _put(next, InsightsService.totalBudgetKey, budget);
+    // The month's budget, for the reports of this month later on.
+    await _put(next, _histKey(DateTime.now()), budget > 0 ? budget : _noBudget);
+    if (budget > 0 && !next.containsKey(sinceKey)) {
+      await _put(next, sinceKey, _monthNumber(DateTime.now()).toDouble());
+    }
+
+    var shares = funds ?? envelope.funds;
+    final reserved = shares.values.fold(0.0, (s, v) => s + v);
+    if (budget <= 0) {
+      shares = const {};
+    } else if (reserved > budget + 0.005) {
+      shares = {for (final e in shares.entries) e.key: e.value * budget / reserved};
+    }
+    for (final key in next.keys.where((k) => k.startsWith(fundPrefix)).toList()) {
+      if ((shares[key.substring(fundPrefix.length)] ?? 0) <= 0) await _put(next, key, null);
+    }
+    for (final e in shares.entries) {
+      await _put(next, '$fundPrefix${e.key}', e.value);
+    }
+    _budgets = next;
+    _changed();
+  }
+
+  /// Moves wallet reservations without touching the budget.
+  Future<void> _setFunds(Map<String, double> funds) async {
+    final next = Map<String, double>.from(_budgets);
+    for (final key in next.keys.where((k) => k.startsWith(fundPrefix)).toList()) {
+      if ((funds[key.substring(fundPrefix.length)] ?? 0) <= 0) await _put(next, key, null);
+    }
+    for (final e in funds.entries) {
+      await _put(next, '$fundPrefix${e.key}', e.value);
+    }
+    _budgets = next;
+    _changed();
+  }
+
+  static int _monthNumber(DateTime d) => d.year * 100 + d.month;
+  static String _monthCode(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}';
+  static String _histKey(DateTime d) => '$histPrefix${_monthCode(d)}';
+  static String _monthKey(DateTime d) => '$closedPrefix${_monthCode(d)}';
+
+  /// Records the budget of the current month if it has not been yet, so
+  /// that reports keep it once the month is over.
+  Future<void> _snapshotBudget() async {
+    final next = Map<String, double>.from(_budgets);
+    // Before budgets were recorded month by month, one budget applied to
+    // every month: it is recorded once from the first month with data, so
+    // older reports keep the budget they were shown against.
+    final first = _expenses.isEmpty
+        ? monthStart(DateTime.now())
+        : monthStart(_expenses.map((e) => e.date).reduce((a, b) => a.isBefore(b) ? a : b));
+    if (totalBudget > 0 && !next.keys.any((k) => k.startsWith(histPrefix))) {
+      await _put(next, _histKey(first), totalBudget);
+    }
+    for (final c in categoryBudgets.entries) {
+      if (!next.keys.any((k) => k.startsWith('$categoryHistPrefix${c.key}@'))) {
+        await _put(next, _categoryHistKey(c.key, first), c.value);
+      }
+    }
+    final key = _histKey(DateTime.now());
+    if (totalBudget > 0 && !next.containsKey(key)) await _put(next, key, totalBudget);
+    _budgets = next;
+  }
+
+  static String _categoryHistKey(String categoryId, DateTime month) =>
+      '$categoryHistPrefix$categoryId@${_monthCode(month)}';
+
+  /// The latest value recorded under [prefix] (keys ending in YYYY-MM) at or
+  /// before [month]; null if none.
+  double? _recordedAt(String prefix, DateTime month) {
+    final target = _monthNumber(month);
+    int? best;
+    double? value;
+    for (final e in _budgets.entries) {
+      if (!e.key.startsWith(prefix)) continue;
+      final parts = e.key.substring(prefix.length).split('-');
+      if (parts.length != 2) continue;
+      final n = int.parse(parts[0]) * 100 + int.parse(parts[1]);
+      if (n <= target && (best == null || n > best)) {
+        best = n;
+        value = e.value;
+      }
+    }
+    return value;
+  }
+
+  /// A category's budget in [month]: the current one for this month, the
+  /// one in force at the time for a past month.
+  double categoryBudgetFor(String categoryId, DateTime month) {
+    final m = monthStart(month);
+    if (!m.isBefore(monthStart(DateTime.now()))) return budgetFor(categoryId);
+    final v = _recordedAt('$categoryHistPrefix$categoryId@', m) ?? 0;
+    return v < 0.01 ? 0 : v;
+  }
+
+  /// Average monthly income actually recorded over the last three complete
+  /// months that had income; null when none was recorded.
+  double? get recordedIncomeAverage {
+    final now = monthStart(DateTime.now());
+    final totals = [
+      for (var i = 1; i <= 3; i++) incomeInMonth(addMonths(now, -i)),
+    ].where((v) => v > 0).toList();
+    if (totals.isEmpty) return null;
+    return totals.reduce((a, b) => a + b) / totals.length;
+  }
+
+  /// An automatic budget based on recorded income follows that income: it
+  /// is worked out again when income is added, changed or removed.
+  Future<void> _refreshRecordedBudget() async {
+    final c = budgetConfig;
+    if (c.mode != BudgetMode.automatic || !c.incomeFromRecords) return;
+    if (((c.budget ?? 0) - totalBudget).abs() < 0.005) return;
+    await setBudgetConfig(c);
+  }
+
+  /// The budget that applied to [month]: the current one for this month,
+  /// the last recorded one for a past month (0 if none was recorded then).
+  double monthlyBudgetFor(DateTime month) {
+    final m = monthStart(month);
+    if (!m.isBefore(monthStart(DateTime.now()))) return totalBudget;
+    final v = _recordedAt(histPrefix, m) ?? 0;
+    return v < 0.01 ? 0 : v;
+  }
+
+  /// [month]'s spending against its budget, on today's local date.
+  BudgetStatus budgetStatus(DateTime month) {
+    final m = monthStart(month);
+    return _statuses[m] ??= BudgetMath.status(
+      budget: monthlyBudgetFor(m),
+      expenses: expensesIn(m),
+      month: m,
+      today: DateTime.now(),
+    );
+  }
+
+  /// True for an expense that pushed its month past the budget.
+  bool isOverBudget(Expense e) {
+    if (e.id == null) return false;
+    final m = monthStart(e.date);
+    return (_overBudget[m] ??= BudgetMath.overBudgetIds(monthlyBudgetFor(m), expensesIn(m))).contains(e.id);
+  }
+
+  /// Category budgets (main currency), by category id.
+  Map<String, double> get categoryBudgets => {
+        for (final e in _budgets.entries)
+          if (e.key != InsightsService.totalBudgetKey && !e.key.contains(':')) e.key: e.value,
+      };
+
+  /// What is left of the monthly budget for [categoryId] once the other
+  /// categories have theirs.
+  double unallocatedFor(String categoryId) =>
+      BudgetMath.unallocated(totalBudget, categoryBudgets, except: categoryId);
+
+  /// Money received in [month], all wallets, in the main currency. Transfers
+  /// and balance corrections are not income.
+  double incomeInMonth(DateTime month) {
+    var total = 0.0;
+    for (final d in _deposits) {
+      if (d.kind != DepositKind.income || !sameMonth(d.date, month)) continue;
+      if (!_wallets.any((w) => w.id == d.walletId)) continue;
+      final w = walletById(d.walletId);
+      total += w.isForeign(activeCurrency.code) ? d.amount * w.rate! : d.amount;
+    }
+    return total;
+  }
+
+  /// What all tracked wallets hold, in the main currency, and how many are
+  /// tracked.
+  ({double total, int tracked}) get totalBalance {
+    var total = 0.0;
+    var tracked = 0;
+    for (final w in _wallets) {
+      final b = balanceOf(w);
+      if (b == null) continue;
+      tracked++;
+      total += w.isForeign(activeCurrency.code) ? b * w.rate! : b;
+    }
+    return (total: total, tracked: tracked);
+  }
+
+  MonthReport report(DateTime month) => MonthReport.build(
+        month: month,
+        expenses: expensesIn(month),
+        income: incomeInMonth(month),
+        budget: monthlyBudgetFor(month),
+        today: DateTime.now(),
+      );
+
+  // Wallet reservations.
 
   Envelope get envelope => Envelope(
         total: totalBudget,
@@ -358,7 +632,7 @@ class AppState extends ChangeNotifier {
   }
 
   /// What is still reserved for this month's budget in a wallet, in the
-  /// wallet's currency. Zero when the envelope is shared or not funded by it.
+  /// wallet's currency. Zero when no reservation is set for it.
   double reservedIn(Wallet w) {
     final left = envelopeIn(DateTime.now()).leftByWallet[w.id] ?? 0;
     return w.isForeign(activeCurrency.code) ? left / w.rate! : left;
@@ -370,78 +644,44 @@ class AppState extends ChangeNotifier {
     return b == null ? null : b - reservedIn(w);
   }
 
-  bool isOutsideBudget(Expense e) => e.id != null && envelopeIn(e.date).outsideExpenseIds.contains(e.id);
-
-  /// Sets the envelope from each wallet's share (main currency). The global
-  /// budget becomes their sum; empty removes the budget.
-  Future<void> setEnvelope(Map<String, double> funds) async {
-    final next = Map<String, double>.from(_budgets);
-    for (final key in _budgets.keys.where((k) => k.startsWith(fundPrefix))) {
-      final id = key.substring(fundPrefix.length);
-      if ((funds[id] ?? 0) <= 0) {
-        await _repo.setBudget(key, 0);
-        next.remove(key);
-      }
-    }
-    var total = 0.0;
-    for (final f in funds.entries) {
-      if (f.value <= 0) continue;
-      total += f.value;
-      await _repo.setBudget('$fundPrefix${f.key}', f.value);
-      next['$fundPrefix${f.key}'] = f.value;
-    }
-    await _repo.setBudget(InsightsService.totalBudgetKey, total);
-    if (total > 0) {
-      next[InsightsService.totalBudgetKey] = total;
-    } else {
-      next.remove(InsightsService.totalBudgetKey);
-    }
-    // Months before the envelope existed are never asked about.
-    if (total > 0 && !next.containsKey(sinceKey)) {
-      final since = _monthNumber(DateTime.now()).toDouble();
-      await _repo.setBudget(sinceKey, since);
-      next[sinceKey] = since;
-    }
-    _budgets = next;
-    _changed();
-  }
-
-  static int _monthNumber(DateTime d) => d.year * 100 + d.month;
-  static String _monthKey(DateTime d) => '$closedPrefix${d.year}-${d.month.toString().padLeft(2, '0')}';
-
-  /// Last month's envelope, if money was left in it and nobody has said
-  /// yet where it goes.
-  ({DateTime month, double left, Map<String, double> byWallet})? get monthToClose {
-    final env = envelope;
+  /// Last month's budget, if money was left in it and nobody has said yet
+  /// where it goes.
+  ({DateTime month, double left})? get monthToClose {
     final since = _budgets[sinceKey];
-    if (env.isEmpty || env.shared || since == null) return null;
+    if (since == null) return null;
     final last = addMonths(monthStart(DateTime.now()), -1);
     if (_monthNumber(last) < since || _budgets.containsKey(_monthKey(last))) return null;
-    final m = envelopeIn(last);
-    if (m.left < 1) return null;
-    return (month: last, left: m.left, byWallet: m.leftByWallet);
+    final left = budgetStatus(last).remaining;
+    if (left < 1) return null;
+    return (month: last, left: left);
   }
 
-  /// Closes a month's envelope. Without [goal], what was left simply stops
-  /// being reserved and is free in the wallets again. With [goal], it leaves
-  /// the wallets (as a withdrawal) and is added to the goal.
+  /// Closes a month. Without [goal], what was left simply stops being
+  /// reserved and is free in the wallets again. With [goal], it leaves the
+  /// wallets that reserved it (or the main wallet) and is added to the goal.
   Future<void> closeMonth(DateTime month, {SavingsGoal? goal}) async {
-    final m = envelopeIn(month);
-    if (goal != null && m.left > 0) {
-      for (final share in m.leftByWallet.entries) {
+    final left = budgetStatus(month).remaining;
+    if (goal != null && left > 0) {
+      var toTake = left;
+      final shares = envelopeIn(month).leftByWallet;
+      final sources = shares.isEmpty ? {mainWallet!.id: left} : shares;
+      for (final share in sources.entries) {
+        if (toTake < 0.005) break;
         if (share.value < 0.005 || !_wallets.any((w) => w.id == share.key)) continue;
         final w = walletById(share.key);
         if (balanceOf(w) == null) continue;
+        final amount = share.value < toTake ? share.value : toTake;
+        toTake -= amount;
         await saveDeposit(Deposit(
           id: newId('d'),
           walletId: w.id,
-          amount: w.isForeign(activeCurrency.code) ? share.value / w.rate! : share.value,
+          amount: w.isForeign(activeCurrency.code) ? amount / w.rate! : amount,
           date: DateTime.now(),
           kind: DepositKind.withdrawal,
           note: tr('Vers l\'objectif « {0} »', [goal.name]),
         ));
       }
-      await updateGoal(goal.copyWith(saved: goal.saved + m.left));
+      await updateGoal(goal.copyWith(saved: goal.saved + left));
     }
     await _repo.setBudget(_monthKey(month), 1);
     _budgets = {..._budgets, _monthKey(month): 1};
@@ -555,10 +795,17 @@ class AppState extends ChangeNotifier {
     if (share != null) {
       final funds = Map.of(envelope.funds)..remove(w.id);
       funds[moveTo.id] = (funds[moveTo.id] ?? 0) + share;
-      await setEnvelope(funds);
+      await _setFunds(funds);
     }
     _wallets = _wallets.where((x) => x.id != w.id).toList();
     _expenses = [for (final e in _expenses) e.walletId == w.id ? e.copyWith(walletId: moveTo.id) : e];
+    for (final debt in _debts.where((d) => d.entries.any((e) => e.walletId == w.id)).toList()) {
+      final cleared = debt.copyWith(entries: [
+        for (final e in debt.entries) e.walletId == w.id ? e.copyWith(clearWallet: true) : e,
+      ]);
+      await _repo.saveDebt(cleared);
+      _debts = [for (final d in _debts) d.id == debt.id ? cleared : d];
+    }
     _changed();
   }
 
@@ -569,12 +816,14 @@ class AppState extends ChangeNotifier {
     await _repo.saveDeposit(d);
     _deposits = [d, ..._deposits.where((x) => x.id != d.id)]..sort((a, b) => b.date.compareTo(a.date));
     _changed();
+    await _refreshRecordedBudget();
   }
 
   Future<void> deleteDeposit(Deposit d) async {
     await _repo.deleteDeposit(d.id);
     _deposits = _deposits.where((x) => x.id != d.id).toList();
     _changed();
+    await _refreshRecordedBudget();
   }
 
   /// Records what the person really has in a wallet now. The first time,
@@ -591,6 +840,91 @@ class AppState extends ChangeNotifier {
       kind: DepositKind.adjustment,
       note: current == null ? tr('Solde de départ') : tr('Correction du solde'),
     ));
+  }
+
+  // --------------------------------------------------------------- debts --
+
+  /// Money lent and borrowed, oldest first.
+  List<Debt> get debts => _debts;
+
+  /// What people still owe me, in the main currency.
+  double get owedToMe => _debts.where((d) => d.isLent).fold(0.0, (s, d) => s + d.remaining);
+
+  /// What I still owe.
+  double get owedByMe => _debts.where((d) => !d.isLent).fold(0.0, (s, d) => s + d.remaining);
+
+  /// The debt a wallet movement belongs to, if any.
+  Debt? debtOfDeposit(Deposit d) {
+    if (d.kind != DepositKind.debt) return null;
+    return _debts.where((x) => x.entries.any((e) => e.id == d.id)).firstOrNull;
+  }
+
+  /// Wallets a debt can move money in and out of: active ones in the main
+  /// currency (debts are counted in the main currency).
+  List<Wallet> get debtWallets =>
+      activeWallets.where((w) => !w.isForeign(activeCurrency.code)).toList();
+
+  /// People already met, most recent first, to suggest them again.
+  List<String> get debtPeople {
+    final seen = <String>{};
+    final sorted = [..._debts]..sort((a, b) => b.date.compareTo(a.date));
+    return [for (final d in sorted) if (seen.add(d.person.trim().toLowerCase())) d.person.trim()];
+  }
+
+  /// Creates or updates a debt, and makes the wallets match its history:
+  /// each entry paid through a wallet has a deposit with the entry's id.
+  Future<void> saveDebt(Debt debt) async {
+    final previous = _debts.where((d) => d.id == debt.id).firstOrNull;
+    await _repo.saveDebt(debt);
+    _debts = previous == null ? [..._debts, debt] : [for (final d in _debts) d.id == debt.id ? debt : d];
+
+    final wanted = <String, Deposit>{
+      for (final e in debt.entries)
+        if (e.walletId != null && _wallets.any((w) => w.id == e.walletId))
+          e.id: Deposit(
+            id: e.id,
+            walletId: e.walletId!,
+            amount: debt.walletEffect(e),
+            date: e.date,
+            kind: DepositKind.debt,
+            note: debtEntryLabel(debt, e),
+          ),
+    };
+    final stale = {...?previous?.entries.map((e) => e.id), ...debt.entries.map((e) => e.id)}
+      ..removeAll(wanted.keys);
+    var deposits = _deposits;
+    for (final id in stale) {
+      if (deposits.any((d) => d.id == id)) {
+        await _repo.deleteDeposit(id);
+        deposits = deposits.where((d) => d.id != id).toList();
+      }
+    }
+    for (final d in wanted.values) {
+      await _repo.saveDeposit(d);
+      deposits = [d, ...deposits.where((x) => x.id != d.id)];
+    }
+    _deposits = deposits..sort((a, b) => b.date.compareTo(a.date));
+    _changed();
+  }
+
+  /// Records a repayment, or more money lent or borrowed.
+  Future<void> addDebtEntry(Debt debt, DebtEntry entry) =>
+      saveDebt(debt.copyWith(entries: [...debt.entries, entry]));
+
+  /// Removes a repayment or an addition; its wallet movement goes with it.
+  Future<void> removeDebtEntry(Debt debt, DebtEntry entry) =>
+      saveDebt(debt.copyWith(entries: debt.entries.where((e) => e.id != entry.id).toList()));
+
+  /// Deletes a debt and the wallet movements it made.
+  Future<void> deleteDebt(Debt debt) async {
+    await _repo.deleteDebt(debt.id);
+    final ids = debt.entries.map((e) => e.id).toSet();
+    for (final d in _deposits.where((d) => ids.contains(d.id)).toList()) {
+      await _repo.deleteDeposit(d.id);
+    }
+    _deposits = _deposits.where((d) => !ids.contains(d.id)).toList();
+    _debts = _debts.where((d) => d.id != debt.id).toList();
+    _changed();
   }
 
   // ---------------------------------------------------------- categories --
@@ -639,4 +973,18 @@ class AppState extends ChangeNotifier {
         deposits: const []);
     await load();
   }
+}
+
+/// How an entry of [debt] reads, e.g. "Prêt à Karim" or "Remboursement de
+/// Karim".
+String debtEntryLabel(Debt debt, DebtEntry e) {
+  final name = debt.person;
+  return switch ((debt.direction, e.kind)) {
+    (DebtDirection.lent, DebtEntryKind.start) => tr('Prêt à {0}', [name]),
+    (DebtDirection.lent, DebtEntryKind.more) => tr('Nouveau prêt à {0}', [name]),
+    (DebtDirection.lent, DebtEntryKind.repayment) => tr('Remboursement de {0}', [name]),
+    (DebtDirection.borrowed, DebtEntryKind.start) => tr('Emprunt à {0}', [name]),
+    (DebtDirection.borrowed, DebtEntryKind.more) => tr('Nouvel emprunt à {0}', [name]),
+    (DebtDirection.borrowed, DebtEntryKind.repayment) => tr('Remboursé à {0}', [name]),
+  };
 }

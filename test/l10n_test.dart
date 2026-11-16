@@ -24,12 +24,13 @@ void main() {
   });
 
   test('every text shown with tr() has an English and an Arabic version', () {
-    final call = RegExp(r"tr\('((?:[^'\\]|\\.)*)'");
+    // Single- or double-quoted: texts with an apostrophe use double quotes.
+    final call = RegExp(r"""tr\((?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")""");
     final missing = <String>{};
     for (final file in Directory('lib').listSync(recursive: true).whereType<File>()) {
       if (!file.path.endsWith('.dart') || file.path.contains('l10n')) continue;
       for (final m in call.allMatches(file.readAsStringSync())) {
-        final key = m[1]!.replaceAll(r"\'", "'").replaceAll(r'\$', r'$').replaceAll(r'\\', r'\');
+        final key = (m[1] ?? m[2]!).replaceAll(r'\"', '"').replaceAll(r"\'", "'").replaceAll(r'\$', r'$').replaceAll(r'\\', r'\');
         // Keys built at runtime ('{0} $noun') are checked through their parts.
         if (key.contains(r'$')) continue;
         if (!en.containsKey(key) || !ar.containsKey(key)) missing.add(key);

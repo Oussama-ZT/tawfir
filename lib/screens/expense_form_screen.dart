@@ -5,13 +5,16 @@ import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/expense.dart';
 import '../models/wallet.dart';
+import '../services/budget_math.dart';
 import '../services/insights_service.dart';
+import '../services/qr_receipt.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/common.dart';
 import 'categories_screen.dart';
+import 'qr_scan_screen.dart';
 import 'wallets_screen.dart';
 import '../l10n/l10n.dart';
 
@@ -21,8 +24,8 @@ class ExpenseFormScreen extends StatefulWidget {
 
   final Expense? expense;
 
-  static Future<void> open(BuildContext context, [Expense? expense]) => Navigator.of(context)
-      .push(MaterialPageRoute(builder: (_) => ExpenseFormScreen(expense: expense), fullscreenDialog: true));
+  static Future<void> open(BuildContext context, [Expense? expense]) =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ExpenseFormScreen(expense: expense), fullscreenDialog: true));
 
   @override
   State<ExpenseFormScreen> createState() => _ExpenseFormScreenState();
@@ -37,15 +40,19 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   String? _amountError;
   bool _saving = false;
 
+  /// A refund is stored as a negative expense: it lowers the month's
+  /// spending and its category, and puts the money back in the wallet.
+  late bool _refund;
+
   bool get _isEdit => widget.expense != null;
 
   @override
   void initState() {
     super.initState();
     final e = widget.expense;
-    final shown = e?.originalAmount ?? e?.amount;
-    _amount = TextEditingController(
-        text: shown == null ? '' : shown.toStringAsFixed(shown.truncateToDouble() == shown ? 0 : 2));
+    _refund = e?.isRefund ?? false;
+    final shown = (e?.originalAmount ?? e?.amount)?.abs();
+    _amount = TextEditingController(text: shown == null ? '' : shown.toStringAsFixed(shown.truncateToDouble() == shown ? 0 : 2));
     _note = TextEditingController(text: e?.note ?? '');
     _categoryId = e?.categoryId ?? ExpenseCategory.visible.first.id;
     final app = context.read<AppState>();
@@ -91,19 +98,20 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     setState(() => _saving = true);
     final wallet = state.walletById(_walletId);
     final rate = _rateFor(wallet);
+    final sign = _refund ? -1 : 1;
     final expense = Expense(
       id: widget.expense?.id,
-      amount: rate == null ? value : value * rate,
+      amount: sign * (rate == null ? value : value * rate),
       categoryId: _categoryId,
       date: _date,
       note: _note.text.trim(),
       walletId: _walletId,
-      originalAmount: rate == null ? null : value,
+      originalAmount: rate == null ? null : sign * value,
       originalCurrency: rate == null ? null : wallet.currencyCode,
     );
 
     // Real-time detection: compare with the user's history before saving.
-    final unusual = InsightsService.checkUnusual(expense, state.expenses);
+    final unusual = _refund ? null : InsightsService.checkUnusual(expense, state.expenses);
 
     if (_isEdit) {
       await state.updateExpense(expense);
@@ -116,10 +124,18 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
     if (unusual != null) {
       final cat = ExpenseCategory.byId(expense.categoryId);
-      messenger.showSnackBar(SnackBar(
-        duration: const Duration(seconds: 6),
-        content: Text(tr('Dépense inhabituelle en {0} : environ {1}× votre montant habituel ({2}).', [cat.label, decimal1(unusual.ratio), moneyApprox(unusual.usual)])),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(
+            tr('Dépense inhabituelle en {0} : environ {1}× votre montant habituel ({2}).', [
+              cat.label,
+              decimal1(unusual.ratio),
+              moneyApprox(unusual.usual),
+            ]),
+          ),
+        ),
+      );
     }
   }
 
@@ -143,7 +159,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           children: [
             Padding(
               padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 8),
-              child: Text(tr('Payé avec'), style: ctx.type.headlineSmall),
+              child: Text(_refund ? tr('Rendu sur') : tr('Payé avec'), style: ctx.type.headlineSmall),
             ),
             for (final w in app.activeWallets)
               ListTile(
@@ -164,21 +180,85 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   /// budget, or outside it.
   Widget? _budgetHint(BuildContext context) {
     final app = context.watch<AppState>();
-    final env = app.envelope;
-    if (_isEdit || env.isEmpty || env.shared || !sameMonth(_date, DateTime.now())) return null;
-    final w = app.walletById(_walletId);
-    final left = app.envelopeIn(_date).leftByWallet[w.id];
+    if (_isEdit || !sameMonth(_date, DateTime.now())) return null;
+    final st = app.budgetStatus(_date);
+    if (!st.hasBudget) return null;
+    // What this expense will count in the main currency.
+    final typed = parseAmount(_amount.text) ?? 0;
+    final rate = _rateFor(app.walletById(_walletId));
+    final value = (rate == null ? typed : typed * rate) * (_refund ? -1 : 1);
+    final after = st.budget - st.spent - value;
     final eco = context.eco;
-    final (text, color) = left == null
-        ? (tr('« {0} » ne finance pas le budget : cette dépense sera hors budget.', [w.name]), eco.coral)
-        : left < 0.005
-        ? (tr('La part de « {0} » dans le budget est épuisée : cette dépense sera hors budget.', [w.name]), eco.coral)
-        : (tr('Pris sur le budget : il reste {0} pour « {1} ».', [money(left), w.name]), eco.muted);
+    // `after` is what the month will have left once this amount is saved
+    // (a refund gives money back).
+    final (text, color) = after < -0.005
+        ? (st.level == BudgetLevel.exceeded && value >= 0
+              ? (tr('Le budget du mois est déjà dépassé de {0}.', [money(st.overspent)]), eco.coral)
+              : value < 0
+              ? (tr('Même avec ce remboursement, le budget reste dépassé de {0}.', [money(-after)]), eco.coral)
+              : (tr('Cette dépense dépassera le budget du mois de {0}.', [money(-after)]), eco.coral))
+        : value < 0
+        ? (tr('Après ce remboursement : {0} restants, soit {1} par jour.', [money(after), moneyApprox(after / st.daysLeft)]), eco.muted)
+        : value > 0
+        ? (tr('Après cette dépense : {0} restants, soit {1} par jour.', [money(after), moneyApprox(after / st.daysLeft)]), eco.muted)
+        : (tr('Reste ce mois : {0}, soit {1} par jour.', [money(st.remaining), moneyApprox(st.dailyAllowance)]), eco.muted);
     return Padding(
       // Lined up under "Payé avec" when that row is shown.
       padding: EdgeInsetsDirectional.fromSTEB(app.activeWallets.length > 1 ? 54 : 16, 12, 16, 12),
       child: Text(text, style: context.type.bodySmall?.copyWith(color: color)),
     );
+  }
+
+  /// Scans a receipt or payment QR code and fills what it states: amount,
+  /// merchant (as the note), date, and the wallet in that currency.
+  Future<void> _scan() async {
+    final raw = await QrScanScreen.open(context);
+    if (raw == null || !mounted) return;
+    final r = QrReceipt.parse(raw);
+    final app = context.read<AppState>();
+    final messages = <String>[];
+
+    setState(() {
+      final amount = r.amount;
+      if (amount != null) {
+        _amount.text = amount.toStringAsFixed(amount.truncateToDouble() == amount ? 0 : 2);
+        _amountError = null;
+      }
+      final merchant = r.merchant;
+      if (merchant != null && _note.text.trim().isEmpty) {
+        _note.text = merchant.length > 80 ? merchant.substring(0, 80) : merchant;
+      }
+      if (r.date != null) _date = r.date!;
+
+      // Amount in another currency: pay with the wallet in that currency.
+      final code = r.currency;
+      if (amount != null && code != null && code != _walletCurrency.code) {
+        final match = app.activeWallets.where((w) => !app.isWalletFrozen(w) && w.currencyOr(activeCurrency).code == code).firstOrNull;
+        if (match != null) {
+          _walletId = match.id;
+          messages.add(tr('Payé avec « {0} », votre portefeuille en {1}.', [match.name, code]));
+        } else {
+          messages.add(
+            tr('Ce montant est en {0} et « {1} » est en {2} : vérifiez-le avant d\'ajouter.', [
+              code,
+              app.walletById(_walletId).name,
+              _walletCurrency.code,
+            ]),
+          );
+        }
+      }
+    });
+
+    if (r.amount != null) {
+      messages.insert(0, tr('Montant lu : {0}.', ['${_amount.text} ${r.currency ?? _walletCurrency.symbol}']));
+    } else if (r.merchant != null) {
+      messages.add(tr('Ce QR code ne contient pas de montant : « {0} » est noté, saisissez le montant.', [r.merchant!]));
+    } else {
+      messages.add(tr('Ce QR code ne contient pas de montant. Saisissez-le à la main.'));
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(duration: const Duration(seconds: 5), content: Text(messages.join(' '))));
   }
 
   Future<void> _newCategory() async {
@@ -187,11 +267,15 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   }
 
   Future<void> _delete() async {
-    final ok = await confirm(context,
-        title: tr('Supprimer cette dépense ?'),
-        message: tr('Elle sera retirée de vos budgets et de vos graphiques.'),
-        confirmLabel: tr('Supprimer'),
-        destructive: true);
+    final ok = await confirm(
+      context,
+      title: _refund ? tr('Supprimer ce remboursement ?') : tr('Supprimer cette dépense ?'),
+      message: _refund
+          ? tr('Il sera retiré de vos budgets et de vos graphiques, et l\'argent sortira de nouveau du portefeuille.')
+          : tr('Elle sera retirée de vos budgets et de vos graphiques.'),
+      confirmLabel: tr('Supprimer'),
+      destructive: true,
+    );
     if (!ok || !mounted) return;
     await context.read<AppState>().deleteExpense(widget.expense!);
     if (mounted) Navigator.pop(context);
@@ -204,15 +288,37 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEdit ? tr('Modifier la dépense') : tr('Nouvelle dépense'), style: context.type.titleLarge),
+        title: Text(
+          _refund
+              ? (_isEdit ? tr('Modifier le remboursement') : tr('Nouveau remboursement'))
+              : (_isEdit ? tr('Modifier la dépense') : tr('Nouvelle dépense')),
+          style: context.type.titleLarge,
+        ),
         actions: [
-          if (_isEdit)
-            IconButton(tooltip: tr('Supprimer'), icon: const Icon(Icons.delete_outline_rounded), onPressed: _delete),
+          if (!_isEdit) TextButton.icon(onPressed: _scan, icon: const Icon(Icons.qr_code_scanner_rounded), label: Text(tr('Scanner'))),
+          if (_isEdit) IconButton(tooltip: tr('Supprimer'), icon: const Icon(Icons.delete_outline_rounded), onPressed: _delete),
         ],
       ),
       body: ListView(
         padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 24),
         children: [
+          SegmentedButton<bool>(
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(value: false, label: Text(tr('Dépense'))),
+              ButtonSegment(value: true, label: Text(tr('Remboursement'))),
+            ],
+            selected: {_refund},
+            onSelectionChanged: (v) => setState(() => _refund = v.first),
+          ),
+          if (_refund)
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(4, 10, 4, 0),
+              child: Text(
+                tr('Argent rendu pour un achat : il est déduit des dépenses du mois et de sa catégorie, et revient dans le portefeuille.'),
+                style: context.type.bodySmall,
+              ),
+            ),
           // Amount: the one thing this screen is for, set large and centred.
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 20),
@@ -247,9 +353,17 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
             ),
           ),
           if (_conversion != null && _amountError == null)
-            Text(_conversion!, textAlign: TextAlign.center, style: context.type.bodyMedium?.copyWith(color: eco.muted)),
+            Text(
+              _conversion!,
+              textAlign: TextAlign.center,
+              style: context.type.bodyMedium?.copyWith(color: eco.muted),
+            ),
           if (_amountError != null)
-            Text(_amountError!, textAlign: TextAlign.center, style: context.type.bodyMedium?.copyWith(color: eco.coral)),
+            Text(
+              _amountError!,
+              textAlign: TextAlign.center,
+              style: context.type.bodyMedium?.copyWith(color: eco.coral),
+            ),
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsetsDirectional.only(start: 4, bottom: 12),
@@ -277,9 +391,11 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
                       children: [
                         Icon(context.read<AppState>().walletById(_walletId).type.icon, size: 22, color: eco.muted),
                         const SizedBox(width: 16),
-                        Expanded(child: Text(tr('Payé avec'), style: context.type.titleSmall)),
-                        Text(context.read<AppState>().walletById(_walletId).name,
-                            style: context.type.bodyMedium?.copyWith(color: eco.muted)),
+                        Expanded(child: Text(_refund ? tr('Rendu sur') : tr('Payé avec'), style: context.type.titleSmall)),
+                        Text(
+                          context.read<AppState>().walletById(_walletId).name,
+                          style: context.type.bodyMedium?.copyWith(color: eco.muted),
+                        ),
                         Icon(Icons.chevron_right_rounded, color: eco.muted),
                       ],
                     ),
@@ -334,7 +450,9 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           padding: EdgeInsetsDirectional.fromSTEB(16, 8, 16, 12 + MediaQuery.viewInsetsOf(context).bottom),
           child: FilledButton(
             onPressed: _saving ? null : _save,
-            child: Text(_isEdit ? tr('Enregistrer les modifications') : tr('Ajouter la dépense')),
+            child: Text(
+              _isEdit ? tr('Enregistrer les modifications') : (_refund ? tr('Ajouter le remboursement') : tr('Ajouter la dépense')),
+            ),
           ),
         ),
       ),

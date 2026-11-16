@@ -8,7 +8,7 @@ import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../l10n/l10n.dart';
 
-/// EcoBudget's "smart" layer: turns raw expenses, budgets and goals into short,
+/// Tawfir's "smart" layer: turns raw expenses, budgets and goals into short,
 /// plain-language insights. Everything runs on the device, no network needed.
 ///
 /// Detection rules:
@@ -256,7 +256,7 @@ class InsightsService {
         Insight(
           kind: InsightKind.tip,
           title: tr('Définissez un budget mensuel'),
-          message: tr('Fixer un budget permet à EcoBudget de vous alerter avant un dépassement.'),
+          message: tr('Fixer un budget permet à Tawfir de vous alerter avant un dépassement.'),
         ),
       ];
     }
@@ -296,8 +296,10 @@ class InsightsService {
   /// Uses the median and the median absolute deviation (MAD), which are not
   /// distorted by a few past outliers the way a mean / standard deviation are.
   static ({double ratio, double usual})? checkUnusual(Expense e, List<Expense> all) {
+    // Refunds are neither unusual spending nor part of the usual amount.
+    if (e.amount <= 0) return null;
     final history = all
-        .where((h) => h.categoryId == e.categoryId && h.date.isBefore(e.date))
+        .where((h) => h.categoryId == e.categoryId && h.date.isBefore(e.date) && h.amount > 0)
         .map((h) => h.amount)
         .toList();
     if (history.length < 5) return null;

@@ -1,11 +1,13 @@
 import 'package:eco_budget/data/repository.dart';
 import 'package:eco_budget/models/category.dart';
+import 'package:eco_budget/models/debt.dart';
 import 'package:eco_budget/models/currency.dart';
 import 'package:eco_budget/models/deposit.dart';
 import 'package:eco_budget/models/expense.dart';
 import 'package:eco_budget/models/plan.dart';
 import 'package:eco_budget/models/savings_goal.dart';
 import 'package:eco_budget/models/wallet.dart';
+import 'package:eco_budget/services/budget_math.dart';
 import 'package:eco_budget/services/envelope_math.dart';
 import 'package:eco_budget/state/app_state.dart';
 import 'package:eco_budget/utils/dates.dart';
@@ -36,8 +38,7 @@ class _MemoryRepo implements BudgetRepository {
   @override
   Future<Map<String, double>> budgets() async => Map.of(stored);
   @override
-  Future<void> setBudget(String key, double amount) async =>
-      amount <= 0 ? stored.remove(key) : stored[key] = amount;
+  Future<void> setBudget(String key, double amount) async => amount <= 0 ? stored.remove(key) : stored[key] = amount;
   @override
   Future<List<SavingsGoal>> goals() async => [...goals_];
   @override
@@ -72,7 +73,14 @@ class _MemoryRepo implements BudgetRepository {
     required List<Wallet> wallets,
     required List<ExpenseCategory> categories,
     required List<Deposit> deposits,
+    List<Debt> debts = const [],
   }) async {}
+  @override
+  Future<List<Debt>> debts() async => [];
+  @override
+  Future<void> saveDebt(Debt d) async {}
+  @override
+  Future<void> deleteDebt(String id) async {}
 }
 
 void main() {
@@ -82,8 +90,8 @@ void main() {
   final now = DateTime.now();
   final cash = Wallet(id: 'cash', name: 'Espèces', type: WalletType.cash, createdAt: DateTime(2026));
   final bank = Wallet(id: 'bank', name: 'Banque', type: WalletType.bank, createdAt: DateTime(2026, 2));
-  Deposit income(String wallet, double amount) => Deposit(
-      id: 'in-$wallet', walletId: wallet, amount: amount, date: monthStart(now), kind: DepositKind.income);
+  Deposit income(String wallet, double amount) =>
+      Deposit(id: 'in-$wallet', walletId: wallet, amount: amount, date: monthStart(now), kind: DepositKind.income);
 
   group('EnvelopeMath', () {
     test('each wallet pays from its own share, then outside the budget', () {
@@ -119,19 +127,37 @@ void main() {
       expect(m.exceeded, isTrue);
       expect(m.leftByWallet, isEmpty);
     });
+
+    test('a refund puts money back in its wallet share', () {
+      const env = Envelope(total: 30000, funds: {'cash': 20000, 'bank': 10000});
+      final m = EnvelopeMath.compute(env, [
+        _spend('1', 22000, 'cash', DateTime(2026, 11, 2)), // 2 000 outside
+        _spend('2', -5000, 'cash', DateTime(2026, 11, 4)), // refund: back under the share
+        _spend('3', -800, 'bank', DateTime(2026, 11, 5)), // refund with nothing spent yet
+      ]);
+      expect(m.used, 17000);
+      expect(m.outside, 0);
+      expect(m.leftByWallet, {'cash': 3000, 'bank': 10000});
+      expect(m.outsideExpenseIds, {'1'}, reason: 'a refund is never spending outside the budget');
+    });
+
+    test('a refund with no envelope is not spending outside it', () {
+      final m = EnvelopeMath.compute(const Envelope(total: 0), [
+        _spend('1', 500, 'cash', DateTime(2026, 11, 2)),
+        _spend('2', -200, 'cash', DateTime(2026, 11, 3)),
+      ]);
+      expect(m.outside, 300);
+      expect(m.outsideExpenseIds, {'1'});
+    });
   });
 
   group('AppState envelope', () {
     test('75 000 DA in cash, 35 000 reserved, a 2 000 DA purchase', () async {
-      final repo = _MemoryRepo(
-        wallets_: [cash],
-        deposits_: [income('cash', 75000)],
-        expenses_: [_spend('1', 2000, 'cash', now)],
-      );
+      final repo = _MemoryRepo(wallets_: [cash], deposits_: [income('cash', 75000)], expenses_: [_spend('1', 2000, 'cash', now)]);
       final app = AppState(repo);
       await app.load();
       app.setPlan(Plan.starter);
-      await app.setEnvelope({'cash': 35000});
+      await app.setBudgetConfig(const BudgetConfig(mode: BudgetMode.manual, manualBudget: 35000), funds: {'cash': 35000});
 
       expect(app.totalBudget, 35000);
       expect(app.balanceOf(cash), 73000, reason: 'what is really in the wallet');
@@ -143,18 +169,19 @@ void main() {
     test('a month ends: what is left can go into a savings goal', () async {
       final last = addMonths(monthStart(now), -1);
       final goal = SavingsGoal(id: 'trip', name: 'Voyage', target: 100000, saved: 10000, createdAt: DateTime(2026));
-      final repo = _MemoryRepo(
-        wallets_: [cash],
-        deposits_: [
-          Deposit(id: 'in', walletId: 'cash', amount: 75000, date: last, kind: DepositKind.income),
-        ],
-        expenses_: [_spend('1', 30000, 'cash', last.add(const Duration(days: 3)))],
-        goals_: [goal],
-      )..stored.addAll({
-          'total': 35000,
-          '${AppState.fundPrefix}cash': 35000,
-          AppState.sinceKey: (last.year * 100 + last.month).toDouble(),
-        });
+      final repo =
+          _MemoryRepo(
+              wallets_: [cash],
+              deposits_: [Deposit(id: 'in', walletId: 'cash', amount: 75000, date: last, kind: DepositKind.income)],
+              expenses_: [_spend('1', 30000, 'cash', last.add(const Duration(days: 3)))],
+              goals_: [goal],
+            )
+            ..stored.addAll({
+              'total': 35000,
+              '${AppState.fundPrefix}cash': 35000,
+              AppState.sinceKey: (last.year * 100 + last.month).toDouble(),
+              '${AppState.histPrefix}${last.year}-${last.month.toString().padLeft(2, '0')}': 35000,
+            });
       final app = AppState(repo);
       await app.load();
 
@@ -171,7 +198,7 @@ void main() {
       final repo = _MemoryRepo(wallets_: [cash], deposits_: [income('cash', 75000)]);
       final app = AppState(repo);
       await app.load();
-      await app.setEnvelope({'cash': 35000});
+      await app.setBudgetConfig(const BudgetConfig(mode: BudgetMode.manual, manualBudget: 35000), funds: {'cash': 35000});
       expect(app.monthToClose, isNull);
     });
 
@@ -192,8 +219,13 @@ void main() {
 
     test('deleting a wallet in euros converts its money at its rate', () async {
       final paysera = Wallet(
-        id: 'paysera', name: 'Paysera', type: WalletType.mobile, createdAt: DateTime(2026, 3),
-        currencyCode: 'EUR', rate: 250);
+        id: 'paysera',
+        name: 'Paysera',
+        type: WalletType.mobile,
+        createdAt: DateTime(2026, 3),
+        currencyCode: 'EUR',
+        rate: 250,
+      );
       final repo = _MemoryRepo(wallets_: [cash, paysera], deposits_: [income('cash', 1000), income('paysera', 10)]);
       final app = AppState(repo);
       await app.load();
@@ -210,8 +242,13 @@ void main() {
           income('cash', 5000),
           income('other', 3000),
           Deposit(
-            id: 't', walletId: 'bank', amount: 1000, date: monthStart(now).add(const Duration(hours: 1)),
-            kind: DepositKind.transfer, sourceWalletId: 'other'),
+            id: 't',
+            walletId: 'bank',
+            amount: 1000,
+            date: monthStart(now).add(const Duration(hours: 1)),
+            kind: DepositKind.transfer,
+            sourceWalletId: 'other',
+          ),
         ],
       );
       final app = AppState(repo);
@@ -242,7 +279,7 @@ void main() {
       final app = AppState(repo);
       await app.load();
       app.setPlan(Plan.premium);
-      await app.setEnvelope({'cash': 20000, 'bank': 10000});
+      await app.setBudgetConfig(const BudgetConfig(mode: BudgetMode.manual, manualBudget: 30000), funds: {'cash': 20000, 'bank': 10000});
       await app.deleteWallet(bank, moveTo: cash);
       expect(app.envelope.funds, {'cash': 30000});
       expect(app.totalBudget, 30000);

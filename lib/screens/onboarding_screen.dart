@@ -50,7 +50,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ),
         _Step(
           tr('Recevez des conseils, atteignez vos objectifs'),
-          tr('EcoBudget repère les dépenses inhabituelles et calcule combien mettre de côté chaque mois. Tout reste sur votre téléphone.'),
+          tr('Tawfir repère les dépenses inhabituelles et calcule combien mettre de côté chaque mois. Tout reste sur votre téléphone.'),
           const _AdvicePreview(),
         ),
       ];
@@ -99,7 +99,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   children: [
                     const EcoMark(size: 30),
                     const SizedBox(width: 10),
-                    Text('EcoBudget', style: context.type.titleLarge?.copyWith(color: eco.onBlue)),
+                    Text('Tawfir', style: context.type.titleLarge?.copyWith(color: eco.onBlue)),
                     const Spacer(),
                     LanguageButton(color: eco.onBlueMuted),
                     AnimatedOpacity(

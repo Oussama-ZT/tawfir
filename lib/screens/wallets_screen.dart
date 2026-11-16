@@ -19,6 +19,7 @@ import '../widgets/currency_picker.dart';
 import '../widgets/expense_tile.dart';
 import '../widgets/glass.dart';
 import '../widgets/payment_card.dart';
+import 'debts_screen.dart';
 import 'expense_form_screen.dart';
 import 'home_shell.dart';
 import 'money_form.dart';
@@ -227,7 +228,7 @@ class _WalletsScreenState extends State<WalletsScreen> {
                   Padding(
                     padding: const EdgeInsetsDirectional.fromSTEB(4, 14, 4, 0),
                     child: Text(
-                      tr('Ajoutez l\'argent que vous y mettez, ou indiquez ce que vous avez déjà avec « Corriger le solde » dans le menu de la carte : EcoBudget calculera ce qu\'il reste après chaque dépense.'),
+                      tr('Ajoutez l\'argent que vous y mettez, ou indiquez ce que vous avez déjà avec « Corriger le solde » dans le menu de la carte : Tawfir calculera ce qu\'il reste après chaque dépense.'),
                       style: context.type.bodySmall,
                     ),
                   ),
@@ -1251,6 +1252,7 @@ class _DepositTile extends StatelessWidget {
         : deposit.amount;
     final other = outgoing ? deposit.walletId : deposit.sourceWalletId;
     final otherName = other == null || !app.wallets.any((w) => w.id == other) ? null : app.walletById(other).name;
+    final debt = app.debtOfDeposit(deposit);
 
     final (icon, label) = switch (deposit.kind) {
       DepositKind.transfer when outgoing => (Icons.north_east_rounded, tr('Vers {0}', [otherName ?? tr('un autre portefeuille')])),
@@ -1258,6 +1260,10 @@ class _DepositTile extends StatelessWidget {
       DepositKind.withdrawal => (Icons.remove_rounded, deposit.note.isEmpty ? tr('Retrait') : deposit.note),
       DepositKind.adjustment => (Icons.tune_rounded, deposit.note.isEmpty ? tr('Correction du solde') : deposit.note),
       DepositKind.income => (Icons.add_rounded, deposit.note.isEmpty ? tr('Ajout d\'argent') : deposit.note),
+      DepositKind.debt => (
+          Icons.handshake_outlined,
+          debt == null ? deposit.note : debtEntryLabel(debt, debt.entries.firstWhere((e) => e.id == deposit.id)),
+        ),
     };
     final withdrawal = deposit.kind == DepositKind.withdrawal;
     final color = withdrawal ? eco.coral : (value < 0 ? eco.muted : eco.leaf);
@@ -1273,7 +1279,9 @@ class _DepositTile extends StatelessWidget {
     return InkWell(
       onTap: () => involvesFrozen
           ? explainFrozen(context, frozen: tr('Ce mouvement concerne un portefeuille gelé'), needed: Plan.premium)
-          : deposit.kind == DepositKind.adjustment
+          : debt != null
+          ? showDebtSheet(context, debt)
+          : deposit.kind == DepositKind.adjustment || deposit.kind == DepositKind.debt
           ? _confirmDelete(context)
           : showMoneyForm(context, MoneyAction.of(deposit.kind), deposit: deposit),
       child: Padding(
@@ -1312,7 +1320,7 @@ class _DepositTile extends StatelessWidget {
     final app = context.read<AppState>();
     final ok = await confirm(
       context,
-      title: tr('Supprimer cette correction ?'),
+      title: deposit.kind == DepositKind.debt ? tr('Supprimer ce mouvement ?') : tr('Supprimer cette correction ?'),
       message: tr('Le solde sera recalculé sans elle.'),
       confirmLabel: tr('Supprimer'),
       destructive: true,

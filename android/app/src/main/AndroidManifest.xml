@@ -2,7 +2,7 @@
     <!-- Needed in release builds too: sign-in, cloud data and purchases. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="EcoBudget"
+        android:label="Tawfir"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

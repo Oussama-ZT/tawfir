@@ -20,6 +20,7 @@ class SessionState extends ChangeNotifier {
   static const _introKey = 'intro_seen';
   static const _themeKey = 'theme_mode';
   static const _tourKey = 'tour_seen';
+  static const _othersTourKey = 'tour_others_seen';
   static const _languageKey = 'language';
 
   AppUser? _user;
@@ -48,6 +49,7 @@ class SessionState extends ChangeNotifier {
   bool get introSeen => _introSeen;
 
   bool _tourSeen = true;
+  bool _othersTourSeen = true;
 
   AppLanguage? _languageChoice;
 
@@ -72,12 +74,28 @@ class SessionState extends ChangeNotifier {
     await _device.setSetting(_tourKey, '1');
   }
 
+  /// False until the tour of the Autres tab (its four boxes) has been shown.
+  bool get othersTourSeen => _othersTourSeen;
+
+  Future<void> finishOthersTour() async {
+    _othersTourSeen = true;
+    await _device.setSetting(_othersTourKey, '1');
+  }
+
+  /// "Revoir la visite guidée": the Autres tour comes back too, the next
+  /// time that tab opens.
+  Future<void> replayOthersTour() async {
+    _othersTourSeen = false;
+    await _device.setSetting(_othersTourKey, null);
+  }
+
   BudgetRepository repository() => _auth.repositoryFor(_user!);
 
   Future<void> restore() async {
     // Phones that already have a local account skip the introduction.
     _introSeen = await _device.setting(_introKey) == '1' || await _device.userCount() > 0;
     _tourSeen = await _device.setting(_tourKey) == '1';
+    _othersTourSeen = await _device.setting(_othersTourKey) == '1';
     _languageChoice = AppLanguage.byCode(await _device.setting(_languageKey));
     final theme = await _device.setting(_themeKey);
     _themeMode = ThemeMode.values.firstWhere((m) => m.name == theme, orElse: () => ThemeMode.system);
@@ -95,22 +113,15 @@ class SessionState extends ChangeNotifier {
     await _device.setSetting(_introKey, '1');
   }
 
-  Future<void> login(String email, String password) async =>
-      _setUser(await _auth.signIn(email: email, password: password));
+  Future<void> login(String email, String password) async => _setUser(await _auth.signIn(email: email, password: password));
 
-  Future<void> register({
-    required String name,
-    required String email,
-    required String password,
-    required Currency currency,
-  }) async =>
+  Future<void> register({required String name, required String email, required String password, required Currency currency}) async =>
       _setUser(await _auth.register(name: name, email: email, password: password, currencyCode: currency.code));
 
   Future<void> signInWithGoogle(Currency defaultCurrency) async =>
       _setUser(await _auth.signInWithGoogle(currencyCode: defaultCurrency.code));
 
-  Future<void> signInWithApple(Currency defaultCurrency) async =>
-      _setUser(await _auth.signInWithApple(currencyCode: defaultCurrency.code));
+  Future<void> signInWithApple(Currency defaultCurrency) async => _setUser(await _auth.signInWithApple(currencyCode: defaultCurrency.code));
 
   Future<void> sendPasswordReset(String email) => _auth.sendPasswordReset(email);
 

@@ -13,7 +13,12 @@ enum DepositKind {
 
   /// Correction so the balance matches what the person really has. Can be
   /// negative. The first one sets the starting balance.
-  adjustment;
+  adjustment,
+
+  /// Money lent, borrowed or given back (see Debt; the deposit has the id of
+  /// its DebtEntry). Signed like [adjustment]: positive arrives, negative
+  /// leaves. Neither income nor an expense.
+  debt;
 
   static DepositKind fromName(String? n) => values.firstWhere((k) => k.name == n, orElse: () => income);
 }
